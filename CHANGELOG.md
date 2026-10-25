@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Webm→Ogg Remuxer:** Ogg comment vendor string is now `PixelPlayer`.
 - **InnerTube Client:** Extended with charts, history, song radio, playlist paging, home-mix summaries and anonymous fallback pools.
 
+### Fixed
+- **Progressive Karaoke Lyrics:** Line-synced lyrics now sweep with the vocals again — LastWave's karaoke contract (a row's end implied by the next row's start, ease-out fill, wrapped rows filled in reading order) is applied to rows without word timing instead of a static highlight. Word-synced rows keep their per-syllable fill, and the new sweep shares the same renderer and refresh-rate glide.
+
 ## [0.7.5-beta] - 2026-06-13
 
 ### Added

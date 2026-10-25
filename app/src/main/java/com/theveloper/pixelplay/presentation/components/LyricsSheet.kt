@@ -69,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -1231,16 +1232,18 @@ fun SyncedLyricsList(
 
     // Karaoke fill used to move in 250 ms steps, because the player's position
     // flow only ticks four times a second. Run a vsync loop between ticks and
-    // steer it toward the last authoritative sample: word fills then glide at
-    // display refresh rate while staying locked to playback. Seeks snap.
+    // steer it toward the last authoritative sample: word fills and line-sync
+    // sweeps then glide at display refresh rate while staying locked to
+    // playback. Seeks snap.
     //
-    // The loop is only worth its cost when word timing exists and the lyrics
-    // are actually on screen. A hidden player sheet must not keep the app
-    // rendering at display refresh rate while the user navigates elsewhere.
-    val hasWordTiming = remember(lines) {
-        lines.any { !it.words.isNullOrEmpty() }
+    // The loop is only worth its cost when the rows carry something to sweep —
+    // word-timed fills and line-sync karaoke alike — and the lyrics are on
+    // screen. A hidden player sheet must not keep the app rendering at display
+    // refresh rate while the user navigates elsewhere.
+    val hasProgressiveRows = remember(lines) {
+        lines.any { !it.words.isNullOrEmpty() || it.line.isNotBlank() }
     }
-    val isKaraokeActive = isPlaying && isVisible && hasWordTiming
+    val isKaraokeActive = isPlaying && isVisible && hasProgressiveRows
     val framePositionMs = remember { mutableLongStateOf(initialPosition) }
     LaunchedEffect(
         isPlaying,
@@ -1613,6 +1616,22 @@ fun LyricLineRow(
     }
 
     if (sanitizedWordClusters.isNullOrEmpty()) {
+        // Line-sync karaoke (LastWave parity): lines without word timing still
+        // progress as the song goes. The dim base text stays still while an
+        // accent copy sweeps across the row — a row's end is never stored, it
+        // is implied by the next row's start, and the final row holds for a
+        // fixed default instead of an unbounded span.
+        val lineWeight = if (isCurrentLine) FontWeight.Bold else FontWeight.Normal
+        val lineSweepDurationMs = remember(line.time, nextTime) {
+            resolveLineSweepDurationMs(
+                lineStartMs = line.time.toLong(),
+                nextLineStartMs = nextTime.toLong(),
+                isLastLine = nextTime >= Int.MAX_VALUE
+            )
+        }
+        var lineTextLayout by remember(line.line, style, lineWeight) {
+            mutableStateOf<TextLayoutResult?>(null)
+        }
         Column(
             modifier = animatedModifier
                 .fillMaxWidth()
@@ -1630,12 +1649,45 @@ fun LyricLineRow(
                     fontWeight = FontWeight.Bold,
                     textAlign = textAlign
                 )
+                if (isCurrentLine && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // LastWave's lyric glow: a soft blurred copy of the active
+                    // row behind the ink.
+                    Text(
+                        text = sanitizedLine,
+                        style = style,
+                        color = Color.White.copy(alpha = LYRIC_GLOW_ALPHA),
+                        fontWeight = lineWeight,
+                        textAlign = textAlign,
+                        modifier = Modifier.blur(LYRIC_GLOW_RADIUS)
+                    )
+                }
                 Text(
                     text = sanitizedLine,
                     style = style,
-                    color = lineColor,
-                    fontWeight = if (isCurrentLine) FontWeight.Bold else FontWeight.Normal,
-                    textAlign = textAlign
+                    color = unhighlightedColor,
+                    fontWeight = lineWeight,
+                    textAlign = textAlign,
+                    onTextLayout = { lineTextLayout = it }
+                )
+                Text(
+                    text = sanitizedLine,
+                    style = style,
+                    color = accentColor,
+                    fontWeight = lineWeight,
+                    textAlign = textAlign,
+                    modifier = Modifier.drawWithContent {
+                        val progress = if (isCurrentLine) {
+                            resolveWordFillProgress(
+                                positionMs = positionProvider(),
+                                wordStartMs = line.time.toLong(),
+                                wordDurationMs = lineSweepDurationMs,
+                                fallbackEndMs = lineEndTime,
+                            )
+                        } else {
+                            0f
+                        }
+                        drawWithKaraokeSweep(progress, lineTextLayout) { drawContent() }
+                    }
                 )
             }
 
@@ -1811,66 +1863,110 @@ fun LyricWordSpan(
                             fallbackEndMs = wordEndTimeMs,
                         )
                     }
-                    if (progress <= 0f) return@drawWithContent
-                    if (progress >= 1f) {
-                        drawContent()
-                        return@drawWithContent
-                    }
-                    val layout = textLayoutResult
-                    if (layout == null || layout.lineCount <= 1) {
-                        clipRect(right = size.width * progress) {
-                            this@drawWithContent.drawContent()
-                        }
-                        return@drawWithContent
-                    }
-
-                    // A single timed word can wrap onto several visual lines.
-                    // Fill it in reading order: complete line one before the
-                    // wipe starts on line two, instead of revealing a vertical
-                    // slice of every line at once.
-                    val lineCounts = ArrayList<Int>(layout.lineCount)
-                    for (line in 0 until layout.lineCount) {
-                        lineCounts += layout.getLineEnd(line, visibleEnd = true) -
-                            layout.getLineStart(line)
-                    }
-                    val lineFractions = resolveLineFillFractions(lineCounts, progress)
-                    if (lineFractions.isEmpty()) {
-                        drawContent()
-                        return@drawWithContent
-                    }
-
-                    val path = Path()
-                    for (line in 0 until layout.lineCount) {
-                        val fraction = lineFractions.getOrElse(line) { 0f }
-                        if (fraction <= 0f) break
-
-                        val lineLeft = layout.getLineLeft(line)
-                        val lineRight = layout.getLineRight(line)
-                        val lineWidth = (lineRight - lineLeft).coerceAtLeast(0f)
-                        val top = layout.getLineTop(line)
-                        val bottom = layout.getLineBottom(line)
-                        val isRtl = layout.getParagraphDirection(line) ==
-                            ResolvedTextDirection.Rtl
-                        val fillWidth = lineWidth * fraction
-                        path.addRect(
-                            if (isRtl) {
-                                Rect(lineRight - fillWidth, top, lineRight, bottom)
-                            } else {
-                                Rect(lineLeft, top, lineLeft + fillWidth, bottom)
-                            }
-                        )
-
-                        if (fraction < 1f) break
-                    }
-
-                    if (!path.isEmpty) {
-                        clipPath(path) {
-                            this@drawWithContent.drawContent()
-                        }
-                    }
+                    drawWithKaraokeSweep(progress, textLayoutResult) { drawContent() }
                 }
             )
         }
+    }
+}
+
+/*
+ * Line-sync karaoke sweep (LastWave parity).
+ *
+ * Word-synced rows carry per-syllable windows and fill through
+ * [LyricWordSpan]; rows that only carry a line timestamp used to light up
+ * statically. LastWave's contract makes a row's end implicit — implied by
+ * the next row's start, never stored — so a line-sync row can still sweep
+ * progressively across its span as the song goes. The constants below keep
+ * that sweep from misbehaving at the edges.
+ */
+
+/** Default hold for the final row, which has no follower to imply its end. */
+private const val LAST_LINE_SWEEP_DURATION_MS = 4_500L
+
+/** Upper bound on a row's sweep so instrumental gaps end in a hold, not a crawl. */
+private const val MAX_LINE_SWEEP_DURATION_MS = 8_000L
+
+/**
+ * Sweep window for one line-sync row: from its start to the next row's
+ * start (0 when timestamps are duplicated), capped for the final row and
+ * for long instrumental gaps.
+ */
+internal fun resolveLineSweepDurationMs(
+    lineStartMs: Long,
+    nextLineStartMs: Long,
+    isLastLine: Boolean
+): Long {
+    val raw = nextLineStartMs - lineStartMs
+    return raw.coerceAtLeast(0L).coerceAtMost(
+        if (isLastLine) LAST_LINE_SWEEP_DURATION_MS else MAX_LINE_SWEEP_DURATION_MS
+    )
+}
+
+/** LastWave's lyric glow: a soft blurred copy of the active row behind the ink. */
+private const val LYRIC_GLOW_ALPHA = 0.5f
+private val LYRIC_GLOW_RADIUS = 8.dp
+
+/**
+ * LastWave-style karaoke sweep shared by the per-word wipe and the line-sync
+ * sweep: draws the accent copy clipped to the sung extent at [progress].
+ *
+ * A wrapped text fills in reading order — the first visual line completes
+ * before the wipe starts on the next one — instead of revealing a vertical
+ * slice of every line at once.
+ */
+internal fun ContentDrawScope.drawWithKaraokeSweep(
+    progress: Float,
+    layout: TextLayoutResult?,
+    content: () -> Unit
+) {
+    if (progress <= 0f) return
+    if (progress >= 1f) {
+        content()
+        return
+    }
+    if (layout == null || layout.lineCount <= 1) {
+        clipRect(right = size.width * progress) { content() }
+        return
+    }
+
+    val lineCounts = ArrayList<Int>(layout.lineCount)
+    for (line in 0 until layout.lineCount) {
+        lineCounts += layout.getLineEnd(line, visibleEnd = true) -
+            layout.getLineStart(line)
+    }
+    val lineFractions = resolveLineFillFractions(lineCounts, progress)
+    if (lineFractions.isEmpty()) {
+        content()
+        return
+    }
+
+    val path = Path()
+    for (line in 0 until layout.lineCount) {
+        val fraction = lineFractions.getOrElse(line) { 0f }
+        if (fraction <= 0f) break
+
+        val lineLeft = layout.getLineLeft(line)
+        val lineRight = layout.getLineRight(line)
+        val lineWidth = (lineRight - lineLeft).coerceAtLeast(0f)
+        val top = layout.getLineTop(line)
+        val bottom = layout.getLineBottom(line)
+        val isRtl = layout.getParagraphDirection(line) ==
+            ResolvedTextDirection.Rtl
+        val fillWidth = lineWidth * fraction
+        path.addRect(
+            if (isRtl) {
+                Rect(lineRight - fillWidth, top, lineRight, bottom)
+            } else {
+                Rect(lineLeft, top, lineLeft + fillWidth, bottom)
+            }
+        )
+
+        if (fraction < 1f) break
+    }
+
+    if (!path.isEmpty) {
+        clipPath(path) { content() }
     }
 }
 

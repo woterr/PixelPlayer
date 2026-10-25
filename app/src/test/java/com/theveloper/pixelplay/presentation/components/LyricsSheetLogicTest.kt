@@ -387,4 +387,57 @@ class LyricsSheetLogicTest {
         assertEquals(5_400, split[1].time + split[1].durationMs)
         assertTrue(splitMultiTokenWords(emptyList(), 1_000).isEmpty())
     }
+
+    @Test
+    fun resolveLineSweepDurationMs_sweepsAcrossRowSpanImpliedByNextRow() {
+        // A row's end is never stored: the next row's start bounds the sweep.
+        assertEquals(3_500L, resolveLineSweepDurationMs(10_000L, 13_500L, isLastLine = false))
+    }
+
+    @Test
+    fun resolveLineSweepDurationMs_finalRowHoldsDefaultInsteadOfUnboundedSpan() {
+        // The final row has no follower (next start = Int.MAX_VALUE sentinel).
+        assertEquals(
+            4_500L,
+            resolveLineSweepDurationMs(10_000L, Int.MAX_VALUE.toLong(), isLastLine = true)
+        )
+    }
+
+    @Test
+    fun resolveLineSweepDurationMs_stopsCrawlingAcrossInstrumentalGaps() {
+        // A row followed by a 50 s instrumental gap must complete, not crawl.
+        assertEquals(8_000L, resolveLineSweepDurationMs(10_000L, 60_000L, isLastLine = false))
+    }
+
+    @Test
+    fun resolveLineSweepDurationMs_neverRunsBackwards() {
+        assertEquals(0L, resolveLineSweepDurationMs(10_000L, 9_000L, isLastLine = false))
+        assertEquals(0L, resolveLineSweepDurationMs(5_000L, 5_000L, isLastLine = false))
+    }
+
+    @Test
+    fun lineSweepProgress_advancesAcrossWholeRowSpan() {
+        val duration = resolveLineSweepDurationMs(10_000L, 14_000L, isLastLine = false)
+
+        val halfway = resolveWordFillProgress(
+            positionMs = 12_000L,
+            wordStartMs = 10_000L,
+            wordDurationMs = duration,
+            fallbackEndMs = 14_000L
+        )
+
+        // Same mild ease-out as syllable fills: at linear halfway the accent
+        // already covers ~62% — a sung line attacks fast and sustains.
+        assertTrue(halfway > 0.6f && halfway < 0.65f)
+        assertEquals(
+            1f,
+            resolveWordFillProgress(14_001L, 10_000L, duration, 14_000L),
+            0.0001f
+        )
+        assertEquals(
+            0f,
+            resolveWordFillProgress(9_999L, 10_000L, duration, 14_000L),
+            0.0001f
+        )
+    }
 }
