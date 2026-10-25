@@ -442,6 +442,7 @@ fun LibraryScreen(
     val haptic = LocalHapticFeedback.current
     val lastTabIndex by playerViewModel.lastLibraryTabIndexFlow.collectAsStateWithLifecycle()
     val favoriteIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle() // Reintroducir favoriteIds aquí
+    val ytConnection by playerViewModel.ytConnection.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope() // Mantener si se usa para acciones de UI
     val syncManager = playerViewModel.syncManager
     var isRefreshing by remember { mutableStateOf(false) }
@@ -1801,19 +1802,22 @@ fun LibraryScreen(
         visible = showCreateAiPlaylistDialog && hasActiveAiProviderApiKey,
         isGenerating = isGeneratingAiPlaylist,
         error = aiError,
+        isYouTubeConnected = ytConnection.isConnected,
         onDismiss = {
             showCreateAiPlaylistDialog = false
             aiGenerationRequestedFromDialog = false
             playerViewModel.clearAiPlaylistError()
         },
-        onGenerate = { playlistName, prompt, minLength, maxLength ->
+        onGenerate = { playlistName, prompt, minLength, maxLength, source, sourceSeed ->
             aiGenerationRequestedFromDialog = true
             playerViewModel.generateAiPlaylist(
                 prompt = prompt,
                 minLength = minLength,
                 maxLength = maxLength,
                 saveAsPlaylist = true,
-                playlistName = playlistName
+                playlistName = playlistName,
+                source = source,
+                sourceSeed = sourceSeed
             )
         }
     )

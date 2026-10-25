@@ -133,6 +133,306 @@ class InnerTubeClient @Inject constructor(
         tracks.distinctBy { it.videoId }.filter { it.videoId.isNotBlank() }.take(limit)
     }
 
+    /**
+     * YouTube Music public charts (FEmusic_charts) — the anonymous "top
+     * tracks" pool behind the Top Tracks generator source.
+     */
+    suspend fun fetchCharts(limit: Int = 50): List<YouTubeTrack> = withContext(Dispatchers.IO) {
+        runCatching {
+            val config = getWebConfig()
+            val root = post(
+                url = "$MUSIC_API/browse?key=${config.apiKey}&prettyPrint=false",
+                body = buildJsonObject {
+                    put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = false))
+                    put("browseId", CHARTS_BROWSE_ID)
+                },
+                clientName = "WEB_REMIX",
+                clientVersion = config.clientVersion,
+                visitorData = config.visitorData,
+                callTimeoutMs = 12_000L,
+            )
+            parseSongRenderers(root)
+        }.getOrDefault(emptyList())
+            .distinctBy { it.videoId }
+            .take(limit)
+    }
+
+    /**
+     * The connected account's listening history (FEmusic_history) for the
+     * Recent Tracks generator source. Read-only browsing — playback is
+     * never recorded here. Falls back to empty when not connected.
+     */
+    suspend fun fetchHistory(limit: Int = 50): List<YouTubeTrack> = withContext(Dispatchers.IO) {
+        if (!auth.connection.value.isConnected) return@withContext emptyList()
+        runCatching {
+            val config = getWebConfig()
+            val root = post(
+                url = "$MUSIC_API/browse?key=${config.apiKey}&prettyPrint=false",
+                body = buildJsonObject {
+                    put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = true))
+                    put("browseId", HISTORY_BROWSE_ID)
+                },
+                clientName = "WEB_REMIX",
+                clientVersion = config.clientVersion,
+                visitorData = config.visitorData,
+                authenticated = true,
+                callTimeoutMs = 12_000L,
+            )
+            parseSongRenderers(root)
+        }.getOrDefault(emptyList())
+            .distinctBy { it.videoId }
+            .take(limit)
+    }
+
+    /**
+     * YouTube Music's native radio for a seed videoId
+     * (`playlistId = RDAMVM<videoId>` via the `next` endpoint). Works for
+     * both authenticated users and guests and returns tracks in YouTube
+     * Music order — the Song Radio the generator builds on. [limit] tracks
+     * are pulled across at most two continuation pages.
+     */
+    suspend fun fetchRadio(videoId: String, limit: Int = 35): List<YouTubeTrack> = withContext(Dispatchers.IO) {
+        val trimmed = videoId.trim()
+        if (trimmed.isBlank()) return@withContext emptyList()
+        val config = getWebConfig()
+        val connected = auth.connection.value.isConnected
+
+        fun nextBody(playlistId: String, continuation: String?): JsonObject = buildJsonObject {
+            put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = connected))
+            put("videoId", trimmed)
+            put("playlistId", playlistId)
+            if (continuation != null) {
+                put("continuation", continuation)
+            } else {
+                put("params", "wAEB")
+                put("isAudioOnly", true)
+            }
+        }
+
+        suspend fun fetch(continuation: String? = null): JsonObject = post(
+            url = "$MUSIC_API/next?key=${config.apiKey}&prettyPrint=false",
+            body = nextBody("RDAMVM$trimmed", continuation),
+            clientName = "WEB_REMIX",
+            clientVersion = config.clientVersion,
+            visitorData = config.visitorData,
+            authenticated = connected,
+            callTimeoutMs = 15_000L,
+        )
+
+        val collected = mutableListOf<YouTubeTrack>()
+        val root = runCatching { fetch() }.getOrNull() ?: return@withContext emptyList()
+        collected += parseSongRenderers(root).filter { it.videoId != trimmed }
+        // One bounce onto the automix/continuation keeps short radios from
+        // starving the pool; more than that would slow generation for a pool
+        // the curation step trims anyway.
+        if (collected.size < limit) {
+            val token = genericContinuationToken(root)
+            if (!token.isNullOrBlank()) {
+                val page = runCatching { fetch(token) }.getOrNull()
+                if (page != null) {
+                    collected += parseSongRenderers(page)
+                        .filter { it.videoId != trimmed }
+                }
+            }
+        }
+        collected.distinctBy { it.videoId }.filter { it.videoId.isNotBlank() }.take(limit)
+    }
+
+    /**
+     * Track list for a youtube music playlist (incl. Mix/My Mix/Radio
+     * `RD*` ids and Liked Music which browses as the "VLM" id). Bounded by
+     * [maxTracks] with at most a few continuation pages.
+     */
+    suspend fun fetchPlaylistSongs(playlistId: String, maxTracks: Int = 40): List<YouTubeTrack> =
+        withContext(Dispatchers.IO) {
+            val rawId = playlistId.trim()
+            if (rawId.isBlank()) return@withContext emptyList()
+            val predicted = extractPlaylistId(rawId)
+            if (predicted.isNullOrBlank()) return@withContext emptyList()
+
+            val browseId = when {
+                predicted == "LM" -> "VLM"
+                predicted.startsWith("VL") ||
+                    predicted.startsWith("RDCLAK") ||
+                    predicted.startsWith("FE") ||
+                    predicted.startsWith("MPRE") ||
+                    predicted.startsWith("UC") -> predicted
+                else -> "VL$predicted"
+            }
+
+            val config = getWebConfig()
+            val connected = auth.connection.value.isConnected
+
+            val root = runCatching {
+                post(
+                    url = "$MUSIC_API/browse?key=${config.apiKey}&prettyPrint=false",
+                    body = buildJsonObject {
+                        put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = connected))
+                        put("browseId", browseId)
+                    },
+                    clientName = "WEB_REMIX",
+                    clientVersion = config.clientVersion,
+                    visitorData = config.visitorData,
+                    authenticated = connected,
+                    callTimeoutMs = 15_000L,
+                )
+            }.recoverCatching { rootError ->
+                if (predicted.startsWith("RD") || predicted.startsWith("PL")) {
+                    // Radio and playlist ids that browse cannot serve still
+                    // answer through `next` unauthenticated.
+                    lastResortNextPlaylist(browseId, config, 15_000L)
+                } else {
+                    throw rootError
+                }
+            }.getOrNull() ?: return@withContext emptyList()
+
+            val songs = playlistTrackContainers(root)
+                .flatMap(::parseSongRenderers)
+                .ifEmpty { parseSongRenderers(root) }
+                .distinctBy { it.videoId }
+                .filter { it.videoId.isNotBlank() }
+                .toMutableList()
+
+            var page = 0
+            while (songs.size < maxTracks && page < PLAYLIST_CONTINUATION_CAP) {
+                val token = playlistContinuationToken(root, page)
+                    ?: genericContinuationToken(root)
+                    ?: break
+                val nextPage = runCatching {
+                    post(
+                        url = "$MUSIC_API/browse?key=${config.apiKey}&prettyPrint=false",
+                        body = buildJsonObject {
+                            put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = connected))
+                            put("continuation", token)
+                        },
+                        clientName = "WEB_REMIX",
+                        clientVersion = config.clientVersion,
+                        visitorData = config.visitorData,
+                        authenticated = connected,
+                        callTimeoutMs = 10_000L,
+                    )
+                }.getOrNull() ?: break
+                val pageSongs = playlistTrackContainers(nextPage)
+                    .flatMap(::parseSongRenderers)
+                    .distinctBy { it.videoId }
+                if (pageSongs.isEmpty()) break
+                songs += pageSongs
+                page++
+            }
+
+            songs.take(maxTracks)
+        }
+
+    /** Mix playlist summaries surfaced on the home feed (My Mix chips). */
+    suspend fun fetchHomeMixes(limit: Int = 4): List<YouTubePlaylistSummary> = withContext(Dispatchers.IO) {
+        val config = getWebConfig()
+        val connected = auth.connection.value.isConnected
+        val root = runCatching {
+            post(
+                url = "$MUSIC_API/browse?key=${config.apiKey}&prettyPrint=false",
+                body = buildJsonObject {
+                    put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = connected))
+                    put("browseId", HOME_BROWSE_ID)
+                },
+                clientName = "WEB_REMIX",
+                clientVersion = config.clientVersion,
+                visitorData = config.visitorData,
+                authenticated = connected,
+                callTimeoutMs = 12_000L,
+            )
+        }.getOrNull() ?: return@withContext emptyList()
+
+        parsePlaylistSummaries(root).take(limit)
+    }
+
+    /** One home-feed shelf row that points at a mix/playlist. */
+    data class YouTubePlaylistSummary(
+        val playlistId: String,
+        val title: String,
+        val artworkUrl: String? = null,
+    )
+
+    private fun parsePlaylistSummaries(root: JsonElement): List<YouTubePlaylistSummary> {
+        val twoRows = mutableListOf<JsonObject>()
+        collectObjects(root, "musicTwoRowItemRenderer", twoRows)
+        val summaries = twoRows.mapNotNull { row ->
+            val playlistId = row.obj("navigationEndpoint")?.obj("watchEndpoint")?.string("playlistId")
+                ?: row.obj("navigationEndpoint")?.obj("watchPlaylistEndpoint")?.string("playlistId")
+                ?: return@mapNotNull null
+            if (playlistId.isBlank()) return@mapNotNull null
+            val title = row.obj("title")?.array("runs")
+                ?.joinToString("") { it.asObject()?.string("text").orEmpty() }
+                ?.trim()?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            YouTubePlaylistSummary(playlistId, title, extractArtwork(row))
+        }
+        // Mix ids (RD*) are what "My Mix" means; RDCLAK5yy editorial mixes and
+        // PL* user playlists are read for diversity but never required.
+        return summaries.distinctBy { it.playlistId }
+    }
+
+    private suspend fun lastResortNextPlaylist(
+        playlistId: String,
+        config: WebConfig,
+        callTimeoutMs: Long,
+    ): JsonObject = post(
+        url = "$MUSIC_API/next?key=${config.apiKey}&prettyPrint=false",
+        body = buildJsonObject {
+            put("context", context("WEB_REMIX", config.clientVersion, config.visitorData, authenticated = false))
+            put("playlistId", playlistId)
+            put("params", "wAEB")
+            put("isAudioOnly", true)
+        },
+        clientName = "WEB_REMIX",
+        clientVersion = config.clientVersion,
+        visitorData = config.visitorData,
+        callTimeoutMs = callTimeoutMs,
+    )
+
+    /** Playlist content shelves on a browse page. */
+    private fun playlistTrackContainers(page: JsonElement): List<JsonObject> {
+        val shelves = mutableListOf<JsonObject>()
+        collectObjects(page, "musicShelfRenderer", shelves)
+        return shelves
+    }
+
+    private fun playlistContinuationToken(page: JsonElement, skip: Int): String? {
+        var continuation: String? = null
+        val shelves = playlistTrackContainers(page)
+        var seen = 0
+        for (shelf in shelves) {
+            val tokenItems = mutableListOf<JsonObject>()
+            collectObjects(shelf, "musicContinuationItemRenderer", tokenItems)
+            for (item in tokenItems) {
+                findString(item, "continuation")
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { token ->
+                        if (seen == skip && continuation == null) {
+                            continuation = token
+                        }
+                        seen++
+                    }
+            }
+        }
+        return continuation
+    }
+
+    private fun genericContinuationToken(page: JsonElement): String? =
+        findString(page, "continuation")?.takeIf { it.isNotBlank() }
+
+    /**
+     * Strips a watch URL / VL prefix down to the bare playlist id, mirroring
+     * LastWave's PlaylistImportManager input handling.
+     */
+    private fun extractPlaylistId(input: String): String? {
+        val trimmed = input.trim()
+        if (trimmed.isBlank()) return null
+        val explicit = Regex("(?:playlist\\?|&|/)list=([A-Za-z0-9_-]+)\\b")
+            .find(trimmed)?.groupValues?.getOrNull(1)
+        return explicit ?: trimmed
+    }
+
+
     suspend fun fetchConnectionIdentity(): String? = withContext(Dispatchers.IO) {
         if (!auth.connection.value.isConnected) return@withContext null
         // The account menu is the authoritative probe: unlike the home feed
@@ -530,6 +830,10 @@ class InnerTubeClient @Inject constructor(
         const val MUSIC_ORIGIN = "https://music.youtube.com"
         const val MUSIC_API = "$MUSIC_ORIGIN/youtubei/v1"
         const val HOME_BROWSE_ID = "FEmusic_home"
+        const val HISTORY_BROWSE_ID = "FEmusic_history"
+        const val CHARTS_BROWSE_ID = "FEmusic_charts"
+        /** Bounded: exists only to cap a pathological continuation loop. */
+        const val PLAYLIST_CONTINUATION_CAP = 4
         const val SONG_SEARCH_FILTER = "EgWKAQIIAWoKEAkQBRAKEAMQBA=="
         const val WEB_USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"

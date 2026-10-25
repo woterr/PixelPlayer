@@ -225,11 +225,16 @@ class PlayerViewModel @Inject constructor(
     private val playbackDispatchStateHolder: PlaybackDispatchStateHolder,
     private val mediaControllerSyncStateHolder: MediaControllerSyncStateHolder,
     private val sessionToken: SessionToken,
-    private val mediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory
+    private val mediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory,
+    private val ytMusicAuthManager: com.theveloper.pixelplay.data.youtube.YtMusicAuthManager
 ) : ViewModel() {
 
     private val _playerUiState = MutableStateFlow(PlayerUiState())
     val playerUiState: StateFlow<PlayerUiState> = _playerUiState.asStateFlow()
+
+    /** YouTube Music session state, for AI generation sources and beyond. */
+    val ytConnection: StateFlow<com.theveloper.pixelplay.data.youtube.YtConnection> =
+        ytMusicAuthManager.connection
 
     // Dedicated queue flow so the player sheet's MiniPlayer branch does not
     // recompose whenever the queue changes. Consumers that actually need the
@@ -2614,14 +2619,18 @@ class PlayerViewModel @Inject constructor(
         minLength: Int,
         maxLength: Int,
         saveAsPlaylist: Boolean = false,
-        playlistName: String? = null
+        playlistName: String? = null,
+        source: com.theveloper.pixelplay.data.generator.PlaylistSource = com.theveloper.pixelplay.data.generator.PlaylistSource.LOCAL_LIBRARY,
+        sourceSeed: com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine.SourceSeed = com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine.SourceSeed()
     ) {
         aiStateHolder.generateAiPlaylist(
             prompt = prompt,
             minLength = minLength,
             maxLength = maxLength,
             saveAsPlaylist = saveAsPlaylist,
-            playlistName = playlistName
+            playlistName = playlistName,
+            source = source,
+            sourceSeed = sourceSeed
         )
     }
 

@@ -16,6 +16,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material3.AlertDialog
@@ -51,6 +53,8 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
@@ -104,6 +108,8 @@ import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import com.theveloper.pixelplay.R
 import androidx.compose.ui.text.style.TextOverflow
+import com.theveloper.pixelplay.data.generator.PlaylistSource
+import com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine
 
 @Composable
 fun PlaylistCreationTypeDialog(
@@ -302,8 +308,16 @@ fun CreateAiPlaylistDialog(
     visible: Boolean,
     isGenerating: Boolean,
     error: String?,
+    isYouTubeConnected: Boolean = false,
     onDismiss: () -> Unit,
-    onGenerate: (playlistName: String?, prompt: String, minLength: Int, maxLength: Int) -> Unit
+    onGenerate: (
+        playlistName: String?,
+        prompt: String,
+        minLength: Int,
+        maxLength: Int,
+        source: PlaylistSource,
+        sourceSeed: YouTubePoolSourceEngine.SourceSeed
+    ) -> Unit
 ) {
     val transitionState = remember { MutableTransitionState(false) }
     transitionState.targetState = visible
@@ -329,6 +343,7 @@ fun CreateAiPlaylistDialog(
                 CreateAiPlaylistContent(
                     isGenerating = isGenerating,
                     error = error,
+                    isYouTubeConnected = isYouTubeConnected,
                     onDismiss = onDismiss,
                     onGenerate = onGenerate
                 )
@@ -341,8 +356,16 @@ fun CreateAiPlaylistDialog(
 private fun CreateAiPlaylistContent(
     isGenerating: Boolean,
     error: String?,
+    isYouTubeConnected: Boolean,
     onDismiss: () -> Unit,
-    onGenerate: (playlistName: String?, prompt: String, minLength: Int, maxLength: Int) -> Unit
+    onGenerate: (
+        playlistName: String?,
+        prompt: String,
+        minLength: Int,
+        maxLength: Int,
+        source: PlaylistSource,
+        sourceSeed: YouTubePoolSourceEngine.SourceSeed
+    ) -> Unit
 ) {
     var playlistName by rememberSaveable { mutableStateOf("") }
     var basePrompt by rememberSaveable { mutableStateOf("") }
@@ -358,6 +381,10 @@ private fun CreateAiPlaylistContent(
     var prioritizeFavorites by rememberSaveable { mutableStateOf(true) }
     var avoidExplicit by rememberSaveable { mutableStateOf(false) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedSource by rememberSaveable { mutableStateOf(PlaylistSource.LOCAL_LIBRARY.name) }
+    var tagInput by rememberSaveable { mutableStateOf("") }
+    var seedTrackInput by rememberSaveable { mutableStateOf("") }
+    var seedArtistInput by rememberSaveable { mutableStateOf("") }
     val controlsEnabled = !isGenerating
     // Obtain resources through LocalConfiguration so any locale/config change
     // triggers recomposition and all derived strings are refreshed.
@@ -388,6 +415,17 @@ private fun CreateAiPlaylistContent(
     // on locale changes and can be safely captured in the onClick lambda below.
     val errorAddInstruction = stringResource(R.string.playlist_creation_ai_error_add_instruction)
     val errorSongRange = stringResource(R.string.playlist_creation_ai_error_song_range)
+    val errorSourceTag = stringResource(R.string.playlist_creation_source_error_tag)
+    val errorSourceSeed = stringResource(R.string.playlist_creation_source_error_seed)
+    val errorSourceArtist = stringResource(R.string.playlist_creation_source_error_artist)
+
+    val resolvedSource = PlaylistSource.entries.firstOrNull { it.name == selectedSource }
+        ?: PlaylistSource.LOCAL_LIBRARY
+    val sourceSeed = YouTubePoolSourceEngine.SourceSeed(
+        tagInput = tagInput.trim(),
+        seedTrackName = seedTrackInput.trim(),
+        seedArtistName = seedArtistInput.trim()
+    )
 
     val triggerGeneration: () -> Unit = generation@{
         val minSongs = minSongsInput.toIntOrNull()
@@ -403,6 +441,23 @@ private fun CreateAiPlaylistContent(
             return@generation
         }
 
+        // Source-specific inputs (LastWave's per-mode seed requirements).
+        when (resolvedSource) {
+            PlaylistSource.TAG_GENRE -> if (tagInput.isBlank()) {
+                localError = errorSourceTag
+                return@generation
+            }
+            PlaylistSource.SONG_RADIO -> if (seedTrackInput.isBlank()) {
+                localError = errorSourceSeed
+                return@generation
+            }
+            PlaylistSource.SIMILAR_ARTISTS -> if (seedArtistInput.isBlank() && seedTrackInput.isBlank()) {
+                localError = errorSourceArtist
+                return@generation
+            }
+            else -> Unit
+        }
+
         val normalizedMin = min(minSongs.coerceIn(5, 150), maxSongs.coerceIn(5, 150))
         val normalizedMax = max(minSongs.coerceIn(5, 150), maxSongs.coerceIn(5, 150))
 
@@ -411,7 +466,9 @@ private fun CreateAiPlaylistContent(
             playlistName.trim().ifBlank { null },
             generatedPromptPreview,
             normalizedMin,
-            normalizedMax
+            normalizedMax,
+            resolvedSource,
+            sourceSeed
         )
     }
 
@@ -477,6 +534,10 @@ private fun CreateAiPlaylistContent(
                             prioritizeFavorites = true
                             avoidExplicit = false
                             localError = null
+                            selectedSource = PlaylistSource.LOCAL_LIBRARY.name
+                            tagInput = ""
+                            seedTrackInput = ""
+                            seedArtistInput = ""
                         },
                         shape = CircleShape,
                         enabled = !isGenerating,
@@ -526,6 +587,81 @@ private fun CreateAiPlaylistContent(
             Spacer(modifier = Modifier.height(4.dp))
 
             HeroAiCard()
+
+            AiSectionCard(
+                title = stringResource(R.string.playlist_creation_source_section_title),
+                enabled = controlsEnabled
+            ) {
+                Text(
+                    text = stringResource(R.string.playlist_creation_source_section_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                SourceSelector(
+                    selected = resolvedSource,
+                    enabled = controlsEnabled,
+                    isYouTubeConnected = isYouTubeConnected,
+                    onSelected = { source ->
+                        selectedSource = source.name
+                        if (source != PlaylistSource.TAG_GENRE) tagInput = ""
+                        if (source != PlaylistSource.SONG_RADIO && source != PlaylistSource.SIMILAR_ARTISTS) {
+                            seedTrackInput = ""
+                            seedArtistInput = ""
+                        }
+                    }
+                )
+
+                // Per-source seed inputs (LastWave generator parity).
+                if (resolvedSource == PlaylistSource.TAG_GENRE) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = tagInput,
+                        onValueChange = { tagInput = it },
+                        label = { Text(stringResource(R.string.playlist_creation_source_tag_hint)) },
+                        enabled = controlsEnabled,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (resolvedSource == PlaylistSource.SONG_RADIO || resolvedSource == PlaylistSource.SIMILAR_ARTISTS) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = seedTrackInput,
+                        onValueChange = { seedTrackInput = it },
+                        label = { Text(stringResource(R.string.playlist_creation_source_seed_track_hint)) },
+                        enabled = controlsEnabled,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = seedArtistInput,
+                        onValueChange = { seedArtistInput = it },
+                        label = { Text(stringResource(R.string.playlist_creation_source_seed_artist_hint)) },
+                        enabled = controlsEnabled,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (needsYouTubeAccount(resolvedSource) && !isYouTubeConnected) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Outlined.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.playlist_creation_source_needs_yt),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
 
             AiSectionCard(
                 title = stringResource(R.string.playlist_creation_ai_section_intent),
@@ -832,6 +968,114 @@ private fun AiSectionCard(
             content()
         }
     }
+}
+
+/** Sources whose pools only exist for a signed-in YouTube Music account. */
+private fun needsYouTubeAccount(source: PlaylistSource): Boolean = when (source) {
+    PlaylistSource.RECENT_TRACKS,
+    PlaylistSource.MY_MIX,
+    PlaylistSource.MY_LIBRARY -> true
+    else -> false
+}
+
+/**
+ * Music-source picker for the AI creation lab. A dropdown mirrors LastWave's
+ * generator mode menu; every YouTube source feeds the same Gemini pipeline,
+ * with [needsYouTubeAccount] sources marked when the account is missing.
+ */
+@Composable
+private fun SourceSelector(
+    selected: PlaylistSource,
+    enabled: Boolean,
+    isYouTubeConnected: Boolean,
+    onSelected: (PlaylistSource) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val sources = remember { PlaylistSource.entries.toList() }
+
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.6f)
+            .animateContentSize()
+            .clickable(enabled = enabled) { expanded = true }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(stringResourceForSource(selected).first),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = stringResource(stringResourceForSource(selected).second),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
+        sources.forEach { source ->
+            val isDefault = source == PlaylistSource.LOCAL_LIBRARY
+            val accountMissing = needsYouTubeAccount(source) && !isYouTubeConnected
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text(
+                            text = stringResource(stringResourceForSource(source).first),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (source == selected) FontWeight.Bold else FontWeight.Normal
+                        )
+                        Text(
+                            text = stringResource(stringResourceForSource(source).second),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (accountMissing) {
+                            Text(
+                                text = stringResource(R.string.playlist_creation_source_needs_yt),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
+                },
+                onClick = {
+                    expanded = false
+                    onSelected(source)
+                }
+            )
+        }
+    }
+}
+
+/** Label + description pair for a generator source. */
+private fun stringResourceForSource(source: PlaylistSource): Pair<Int, Int> = when (source) {
+    PlaylistSource.TOP_TRACKS -> R.string.gen_mode_top to R.string.gen_mode_top_desc
+    PlaylistSource.RECENT_TRACKS -> R.string.gen_mode_recent to R.string.gen_mode_recent_desc
+    PlaylistSource.SONG_RADIO -> R.string.gen_mode_song_radio to R.string.gen_mode_song_radio_desc
+    PlaylistSource.SIMILAR_ARTISTS -> R.string.gen_mode_sim_artists to R.string.gen_mode_sim_artists_desc
+    PlaylistSource.TAG_GENRE -> R.string.gen_mode_tag to R.string.gen_mode_tag_desc
+    PlaylistSource.MY_MIX -> R.string.gen_mode_mix to R.string.gen_mode_mix_desc
+    PlaylistSource.RECOMMENDATIONS -> R.string.gen_mode_reco to R.string.gen_mode_reco_desc
+    PlaylistSource.NEVER_HEARD -> R.string.gen_mode_never to R.string.gen_mode_never_desc
+    PlaylistSource.MY_LIBRARY -> R.string.gen_mode_library to R.string.gen_mode_library_desc
+    PlaylistSource.LOCAL_LIBRARY -> R.string.gen_source_local to R.string.gen_source_local_desc
 }
 
 @Composable

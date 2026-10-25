@@ -8,7 +8,10 @@ import com.theveloper.pixelplay.data.ai.AiNotificationManager
 import com.theveloper.pixelplay.data.ai.AiPlaylistGenerator
 import com.theveloper.pixelplay.data.ai.AiSystemPromptType
 import com.theveloper.pixelplay.data.ai.provider.AiProviderException
+import com.theveloper.pixelplay.data.generator.PlaylistSource
+import com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine
 import com.theveloper.pixelplay.data.preferences.PlaylistPreferencesRepository
+import com.theveloper.pixelplay.data.youtube.YouTubeLibraryMirror
 import com.theveloper.pixelplay.data.model.Song
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -32,7 +35,9 @@ class AiStateHolder @Inject constructor(
     private val playlistPreferencesRepository: PlaylistPreferencesRepository,
     private val dailyMixStateHolder: DailyMixStateHolder,
     private val notificationManager: AiNotificationManager,
-    private val aiHandler: com.theveloper.pixelplay.data.ai.AiHandler
+    private val aiHandler: com.theveloper.pixelplay.data.ai.AiHandler,
+    private val youTubePoolEngine: YouTubePoolSourceEngine,
+    private val youTubeLibraryMirror: YouTubeLibraryMirror
 ) {
     // State
     // AI State Management: Observables for tracking background generation progress
@@ -54,6 +59,8 @@ class AiStateHolder @Inject constructor(
     private var _lastPlaylistPrompt: String? = null
     private var _lastMinLength: Int = 5
     private var _lastMaxLength: Int = 15
+    private var _lastSource: PlaylistSource = PlaylistSource.LOCAL_LIBRARY
+    private var _lastSourceSeed: YouTubePoolSourceEngine.SourceSeed = YouTubePoolSourceEngine.SourceSeed()
 
     private var scope: CoroutineScope? = null
     private var allSongsProvider: (suspend () -> List<Song>)? = null
@@ -105,7 +112,13 @@ class AiStateHolder @Inject constructor(
     fun retryLastPlaylistGeneration() {
         // Safe retry using cached prompt and length constraints
         val prompt = _lastPlaylistPrompt ?: return
-        generateAiPlaylist(prompt, _lastMinLength, _lastMaxLength)
+        generateAiPlaylist(
+            prompt = prompt,
+            minLength = _lastMinLength,
+            maxLength = _lastMaxLength,
+            source = _lastSource,
+            sourceSeed = _lastSourceSeed
+        )
     }
 
     fun clearAiPlaylistError() {
@@ -121,16 +134,20 @@ class AiStateHolder @Inject constructor(
         minLength: Int,
         maxLength: Int,
         saveAsPlaylist: Boolean = false,
-        playlistName: String? = null
+        playlistName: String? = null,
+        source: PlaylistSource = PlaylistSource.LOCAL_LIBRARY,
+        sourceSeed: YouTubePoolSourceEngine.SourceSeed = YouTubePoolSourceEngine.SourceSeed()
     ) {
         _lastPlaylistPrompt = prompt
         _lastMinLength = minLength
         _lastMaxLength = maxLength
+        _lastSource = source
+        _lastSourceSeed = sourceSeed
 
         val scope = this.scope ?: return
 
         scope.launch {
-            val allSongs = allSongsProvider?.invoke() ?: emptyList()
+            val librarySongs = allSongsProvider?.invoke() ?: emptyList()
             val favoriteIds = favoriteSongIdsProvider?.invoke() ?: emptySet()
             _isGeneratingAiPlaylist.value = true
             _aiError.value = null
@@ -144,13 +161,35 @@ class AiStateHolder @Inject constructor(
                     .filter { it.isNotEmpty() }
                     .toSet()
 
-                // Generate candidate pool using DailyMixManager logic
-                _aiStatus.value = "Selecting best candidates..."
-                val candidatePool = dailyMixManager.generateDailyMix(
-                    allSongs = allSongs,
-                    favoriteSongIds = favoriteIds,
-                    limit = 120
-                )
+                // Candidates come from the selected source. YouTube sources pull
+                // a fresh pool through the InnerTube feeds (LastWave's generator
+                // pathways, YouTube edition); the classic path ranks the device
+                // library with the Daily Mix logic.
+                var allSongs = librarySongs
+                val candidatePool: List<Song> = if (source == PlaylistSource.LOCAL_LIBRARY) {
+                    _aiStatus.value = "Selecting best candidates..."
+                    dailyMixManager.generateDailyMix(
+                        allSongs = allSongs,
+                        favoriteSongIds = favoriteIds,
+                        limit = 120
+                    )
+                } else {
+                    _aiStatus.value = "Fetching candidates from ${context.getString(source.labelRes)}…"
+                    val prepared = youTubePoolEngine.prepareCandidates(source, sourceSeed, librarySongs)
+                    if (prepared != null) {
+                        allSongs = prepared.second
+                        prepared.first
+                    } else {
+                        // A starving source degrades to the library instead of
+                        // failing the request outright.
+                        _aiStatus.value = "Selecting best candidates..."
+                        dailyMixManager.generateDailyMix(
+                            allSongs = allSongs,
+                            favoriteSongIds = favoriteIds,
+                            limit = 120
+                        )
+                    }
+                }
 
                 // Step 2: Invoke AI Generation Engine
                 _aiStatus.value = "Consulting the Daily Mix guide..."
@@ -172,6 +211,10 @@ class AiStateHolder @Inject constructor(
                                 prompt = prompt,
                                 existingNames = existingPlaylistNames
                             )
+                            // YouTube-sourced songs must outlive this session:
+                            // mirror them into the unified library before the
+                            // playlist stores their ids.
+                            youTubeLibraryMirror.mirrorForPersistence(generatedSongs)
                             val songIds = generatedSongs.map { it.id }
                             playlistPreferencesRepository.createPlaylist(
                                 name = resolvedPlaylistName,

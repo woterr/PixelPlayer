@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Playlist generator sources (LastWave mode ids preserved) -->
+    <string name="gen_mode_top">Top tracks</string>
+    <string name="gen_mode_top_desc">Today\'s YouTube Music charts</string>
+    <string name="gen_mode_recent">Recent listens</string>
+    <string name="gen_mode_recent_desc">What you played on YouTube Music lately</string>
+    <string name="gen_mode_song_radio">Song radio</string>
+    <string name="gen_mode_song_radio_desc">A mix seeded by one song</string>
+    <string name="gen_mode_sim_artists">Similar artists</string>
+    <string name="gen_mode_sim_artists_desc">Songs from artists close to your seed</string>
+    <string name="gen_mode_tag">Genre / tag</string>
+    <string name="gen_mode_tag_desc">Search a genre like pop, lofi or jazz</string>
+    <string name="gen_mode_mix">My mix</string>
+    <string name="gen_mode_mix_desc">YouTube Music\'s mixes for your account</string>
+    <string name="gen_mode_reco">Recommendations</string>
+    <string name="gen_mode_reco_desc">The personal YouTube Music home feed</string>
+    <string name="gen_mode_never">Never heard</string>
+    <string name="gen_mode_never_desc">Recommendations outside your library</string>
+    <string name="gen_mode_library">My library</string>
+    <string name="gen_mode_library_desc">Your connected YouTube Music likes</string>
+    <string name="gen_source_local">Local library</string>
+    <string name="gen_source_local_desc">Pick from the music stored on this device</string>
+
+    <!-- Playlist creation: source menu -->
+    <string name="playlist_creation_source_section_title">Music source</string>
+    <string name="playlist_creation_source_section_subtitle">Where the AI pulls candidates from</string>
+    <string name="playlist_creation_source_tag_hint">Genre tag (pop, lofi, jazz…)</string>
+    <string name="playlist_creation_source_seed_track_hint">Seed track (title)</string>
+    <string name="playlist_creation_source_seed_artist_hint">Seed artist</string>
+    <string name="playlist_creation_source_error_tag">Enter a genre tag for the genre source</string>
+    <string name="playlist_creation_source_error_seed">Enter a seed track and artist</string>
+    <string name="playlist_creation_source_error_artist">Enter a seed artist</string>
+    <string name="playlist_creation_source_status_connect">Connecting to YouTube Music…</string>
+    <string name="playlist_creation_source_needs_yt">Sign in to YouTube Music to use this source</string>
+</resources>

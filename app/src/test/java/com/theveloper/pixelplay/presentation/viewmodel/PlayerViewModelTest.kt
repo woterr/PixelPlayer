@@ -101,6 +101,7 @@ class PlayerViewModelTest {
     private val mockPlaylistSelectionStateHolder: PlaylistSelectionStateHolder = mockk(relaxed = true)
     private val mockMediaMapper: com.theveloper.pixelplay.data.media.MediaMapper = mockk(relaxed = true)
     private lateinit var mockMediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory
+    private val mockYtMusicAuthManager: com.theveloper.pixelplay.data.youtube.YtMusicAuthManager = mockk(relaxed = true)
 
     private val testDispatcher = StandardTestDispatcher()
 
@@ -318,7 +319,8 @@ class PlayerViewModelTest {
             playbackDispatchStateHolder,
             mediaControllerSyncStateHolder,
             sessionToken,
-            mockMediaControllerFactory
+            mockMediaControllerFactory,
+            mockYtMusicAuthManager
         )
     }
 

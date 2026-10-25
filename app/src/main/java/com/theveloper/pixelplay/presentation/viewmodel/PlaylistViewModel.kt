@@ -34,6 +34,7 @@ import android.os.Build
 import android.provider.MediaStore
 import com.theveloper.pixelplay.data.preferences.TelegramTopicDisplayMode
 import com.theveloper.pixelplay.data.ai.AiPlaylistGenerator
+import com.theveloper.pixelplay.data.youtube.YouTubeLibraryMirror
 import com.theveloper.pixelplay.R
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -74,6 +75,8 @@ class PlaylistViewModel @Inject constructor(
     private val musicRepository: MusicRepository,
     private val dailyMixManager: DailyMixManager,
     private val aiPlaylistGenerator: AiPlaylistGenerator,
+    private val youTubePoolEngine: com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine,
+    private val youTubeLibraryMirror: YouTubeLibraryMirror,
     private val m3uManager: M3uManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -927,13 +930,31 @@ class PlaylistViewModel @Inject constructor(
         }
     }
 
-    fun generateAiPlaylist(prompt: String, minLength: Int = 10, maxLength: Int = 50) {
+    fun generateAiPlaylist(
+        prompt: String,
+        minLength: Int = 10,
+        maxLength: Int = 50,
+        source: com.theveloper.pixelplay.data.generator.PlaylistSource = com.theveloper.pixelplay.data.generator.PlaylistSource.LOCAL_LIBRARY,
+        sourceSeed: com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine.SourceSeed = com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine.SourceSeed()
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isAiGenerating = true, aiGenerationError = null) }
 
             try {
-                val allSongs = withContext(Dispatchers.IO) {
+                val librarySongs = withContext(Dispatchers.IO) {
                     musicRepository.getAllSongsOnce()
+                }
+
+                // YouTube sources funnel the pool through the same engine the
+                // main AI sheet uses; local sources keep the classic ranking.
+                var allSongs = librarySongs
+                var candidateSongs: List<Song>? = null
+                if (source != com.theveloper.pixelplay.data.generator.PlaylistSource.LOCAL_LIBRARY) {
+                    val prepared = youTubePoolEngine.prepareCandidates(source, sourceSeed, librarySongs)
+                    if (prepared != null) {
+                        allSongs = prepared.second
+                        candidateSongs = prepared.first
+                    }
                 }
 
                 // Call AiPlaylistGenerator
@@ -941,12 +962,17 @@ class PlaylistViewModel @Inject constructor(
                     userPrompt = prompt,
                     allSongs = allSongs,
                     minLength = minLength,
-                    maxLength = maxLength
+                    maxLength = maxLength,
+                    candidateSongs = candidateSongs
                 )
 
                 result.onSuccess { selectedSongs ->
                     // Create Playlist
                     val playlistName = "AI: $prompt".take(50)
+
+                    // Same persistence rule as the main AI sheet: mirror
+                    // YouTube-sourced songs so the playlist stays resolvable.
+                    youTubeLibraryMirror.mirrorForPersistence(selectedSongs)
 
                     playlistPreferencesRepository.createPlaylist(
                         name = playlistName,
