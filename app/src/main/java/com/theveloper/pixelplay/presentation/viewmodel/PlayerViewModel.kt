@@ -123,6 +123,7 @@ import dagger.Lazy
 private const val CAST_LOG_TAG = "PlayerCastTransfer"
 private const val ENABLE_FOLDERS_SOURCE_SWITCHING = true
 private const val HOME_MIX_PREVIEW_LIMIT = 48
+private const val DISCOVER_LIMIT = 30
 private const val EXTERNAL_SONG_ID_PREFIX = "external:"
 
 internal fun List<Song>.toPlaybackQueue(): ImmutableList<Song> = when (this) {
@@ -226,7 +227,8 @@ class PlayerViewModel @Inject constructor(
     private val mediaControllerSyncStateHolder: MediaControllerSyncStateHolder,
     private val sessionToken: SessionToken,
     private val mediaControllerFactory: com.theveloper.pixelplay.data.media.MediaControllerFactory,
-    private val ytMusicAuthManager: com.theveloper.pixelplay.data.youtube.YtMusicAuthManager
+    private val ytMusicAuthManager: com.theveloper.pixelplay.data.youtube.YtMusicAuthManager,
+    private val youTubePoolEngine: com.theveloper.pixelplay.data.generator.YouTubePoolSourceEngine
 ) : ViewModel() {
 
     private val _playerUiState = MutableStateFlow(PlayerUiState())
@@ -1153,6 +1155,25 @@ class PlayerViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = persistentListOf()
         )
+
+    private val _discoverSongs = MutableStateFlow<ImmutableList<Song>>(persistentListOf())
+
+    /**
+     * YouTube-driven recommendations for the home Discover shelf. Fetched
+     * on demand by [refreshDiscoverSongs] — a shallow pool is fine (empty
+     * simply hides the shelf).
+     */
+    val discoverSongs: StateFlow<ImmutableList<Song>> = _discoverSongs.asStateFlow()
+
+    private var discoverRefreshJob: Job? = null
+
+    fun refreshDiscoverSongs() {
+        if (discoverRefreshJob?.isActive == true) return
+        discoverRefreshJob = viewModelScope.launch {
+            val pool = youTubePoolEngine.discover(limit = DISCOVER_LIMIT)
+            _discoverSongs.value = youTubePoolEngine.toSongs(pool).toImmutableList()
+        }
+    }
 
     val songCountFlow: StateFlow<Int> = musicRepository.getSongCountFlow()
         .stateIn(

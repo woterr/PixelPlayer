@@ -79,6 +79,41 @@ class YouTubePoolSourceEngine @Inject constructor(
         tracks.map { youTubeRepository.toSong(it) }.distinctBy { it.id }
 
     /**
+     * The Discover shelf: YouTube-driven recommendations for the home
+     * screen. The freshest listening-history track branches through song
+     * radio for related material, the personalized home feed widens the
+     * pool, and public charts pad anonymous sessions — then the blend is
+     * shuffled so the shelf reads fresh on every home visit (LastWave's
+     * recommendation remix ordering).
+     */
+    suspend fun discover(limit: Int = 30): List<YouTubeTrack> = withContext(Dispatchers.IO) {
+        runCatching {
+            val pool = mutableListOf<YouTubeTrack>()
+            val historySeed = runCatching { innerTube.fetchHistory(limit = 1) }
+                .getOrDefault(emptyList())
+                .firstOrNull()
+            if (historySeed != null) {
+                pool += runCatching { innerTube.fetchRadio(historySeed.videoId, limit / 2 + 10) }
+                    .getOrDefault(emptyList())
+            }
+            pool += innerTube.fetchHomeSongs(limit)
+            if (pool.size < limit) {
+                innerTube.fetchCharts(limit).forEach { track ->
+                    if (pool.none { it.videoId == track.videoId }) pool += track
+                }
+            }
+            pool
+                .distinctBy { it.videoId }
+                .filter { it.videoId.isNotBlank() && it.title.isNotBlank() }
+                .shuffled()
+                .take(limit)
+        }.getOrElse { error ->
+            if (error is CancellationException) throw error
+            emptyList()
+        }
+    }
+
+    /**
      * Builds the candidate pool plus the generation bank for [source]:
      * candidates go straight to the LLM prompt, the bank additionally
      * carries the device library so AI-returned ids always resolve.

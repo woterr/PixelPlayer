@@ -146,6 +146,11 @@
     <!-- RecentlyPlayedSection -->
     <string name="home_recently_played_title">Recently Played</string>
 
+    <!-- DiscoverSection (YouTube Music recommendations) -->
+    <string name="home_discover_title">Discover</string>
+    <string name="home_discover_subtitle">From YouTube Music</string>
+    <string name="home_discover_queue_name">Discover</string>
+
     <!-- RecentlyPlayedScreen -->
     <string name="recently_played_title">Recently Played</string>
     <string name="recently_played_action_play_latest">Play latest</string>

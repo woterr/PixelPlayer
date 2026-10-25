@@ -93,6 +93,8 @@ import com.theveloper.pixelplay.presentation.jellyfin.dashboard.JellyfinDashboar
 import com.theveloper.pixelplay.presentation.navidrome.dashboard.NavidromeDashboardViewModel
 import com.theveloper.pixelplay.presentation.qqmusic.dashboard.QqMusicDashboardViewModel
 import com.theveloper.pixelplay.presentation.components.DailyMixSection
+import com.theveloper.pixelplay.presentation.components.DiscoverSection
+import com.theveloper.pixelplay.presentation.components.DiscoverSectionMinSongsToShow
 import com.theveloper.pixelplay.presentation.components.HomeGradientTopBar
 import com.theveloper.pixelplay.presentation.components.HomeOptionsBottomSheet
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
@@ -147,6 +149,7 @@ fun HomeScreen(
     val dailyMixSongs by playerViewModel.dailyMixSongs.collectAsStateWithLifecycle()
     val curatedYourMixSongs by playerViewModel.yourMixSongs.collectAsStateWithLifecycle()
     val homeMixPreviewSongs by playerViewModel.homeMixPreviewSongs.collectAsStateWithLifecycle()
+    val discoverSongs by playerViewModel.discoverSongs.collectAsStateWithLifecycle()
     val playbackHistory by playerViewModel.playbackHistory.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -222,6 +225,16 @@ fun HomeScreen(
 
     val recentlyPlayedQueue = remember(recentlyPlayedSongs) {
         recentlyPlayedSongs.map { it.song }.toImmutableList()
+    }
+
+    // Fetch the Discover shelf once per session, the first time Home is
+    // visible; the pool stays until the process dies (LastWave behavior:
+    // each app open re-shuffles the recommendation feed).
+    LaunchedEffect(lifecycleOwner) {
+        val isHomeVisible = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        if (isHomeVisible && playerViewModel.discoverSongs.value.isEmpty()) {
+            playerViewModel.refreshDiscoverSongs()
+        }
     }
 
     ReportDrawnWhen {
@@ -450,6 +463,20 @@ fun HomeScreen(
                                 }
                             },
                             playerViewModel = playerViewModel
+                        )
+                    }
+                }
+
+                // Discover — YouTube Music recommendations shelf
+                if (discoverSongs.size >= DiscoverSectionMinSongsToShow) {
+                    item(
+                        key = "discover_section",
+                        contentType = "discover_section"
+                    ) {
+                        DiscoverSection(
+                            songs = discoverSongs,
+                            playerViewModel = playerViewModel,
+                            currentSongId = currentSong?.id
                         )
                     }
                 }
