@@ -68,6 +68,22 @@ class YouTubeRepository @Inject constructor(
         return resolveStream(videoId)
     }
 
+    /**
+     * Stream used by the download manager: resolves fresh (the playback cache
+     * is dropped — a URL cached here could be minutes old and steal the
+     * transfer budget) with Opus preferred, the WebM rendition
+     * [WebmOpusRemuxer] unwraps into tagged Ogg Opus.
+     */
+    suspend fun resolveDownloadStream(videoId: String): YouTubeAudioStream =
+        withContext(Dispatchers.IO) {
+            extractor.invalidateCache(videoId)
+            extractor.resolveAudioStream(
+                videoId = videoId,
+                preferOpus = true,
+            )
+        }
+
+
     fun invalidateStream(videoId: String) {
         extractor.invalidatePlayerState(videoId)
     }

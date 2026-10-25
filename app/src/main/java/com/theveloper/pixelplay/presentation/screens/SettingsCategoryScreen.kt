@@ -3125,6 +3125,25 @@ private fun YouTubeSettingsSectionContent(
             },
             onClick = { showQualitySheet = true }
         )
+        SettingsItem(
+            title = stringResource(R.string.download_quality_section_title),
+            subtitle = stringResource(ytQualityTierTitleRes(streamQualitySettings.downloadQuality)),
+            leadingIcon = {
+                Icon(
+                    painterResource(R.drawable.outline_save_24),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            onClick = { showQualitySheet = true }
+        )
         SwitchSettingItem(
             title = stringResource(R.string.settings_youtube_lossless_switch_title),
             subtitle = stringResource(R.string.settings_youtube_lossless_switch_subtitle),
@@ -3173,7 +3192,9 @@ private fun YouTubeSettingsSectionContent(
                 viewModel.setStreamingQuality(tier)
                 showQualitySheet = false
             },
-            onDismiss = { showQualitySheet = false }
+            onDismiss = { showQualitySheet = false },
+            selectedDownload = streamQualitySettings.downloadQuality,
+            onSelectDownload = viewModel::setDownloadQuality,
         )
     }
 
@@ -3241,12 +3262,100 @@ private val YT_QUALITY_TIERS = listOf(
 private fun ytQualityTierTitleRes(quality: Int): Int =
     YT_QUALITY_TIERS.firstOrNull { it.id == quality }?.titleRes ?: R.string.quality_tier_youtube_title
 
+@Composable
+private fun QualityTierList(
+    selected: Int,
+    onPick: (Int) -> Unit,
+) {
+YT_QUALITY_TIERS.forEach { tier ->
+    val isSelected = tier.id == selected
+    Surface(
+        onClick = { onPick(tier.id) },
+        shape = RoundedCornerShape(20.dp),
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        border = if (isSelected) {
+            BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = stringResource(tier.titleRes),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = GoogleSansRounded),
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        }
+                    ) {
+                        Text(
+                            text = StreamingQuality.shortBadge(tier.id),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(tier.subtitleRes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+            if (isSelected) {
+                Icon(
+                    Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    }
+}}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun YouTubeQualitySheet(
     selected: Int,
     onSelect: (Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    selectedDownload: Int? = null,
+    onSelectDownload: ((Int) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -3278,85 +3387,22 @@ private fun YouTubeQualitySheet(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline
             )
-            YT_QUALITY_TIERS.forEach { tier ->
-                val isSelected = tier.id == selected
-                Surface(
-                    onClick = { onSelect(tier.id) },
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    border = if (isSelected) {
-                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-                    } else {
-                        null
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(tier.titleRes),
-                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = GoogleSansRounded),
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                    color = if (isSelected) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    }
-                                )
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = if (isSelected) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceContainerHighest
-                                    }
-                                ) {
-                                    Text(
-                                        text = StreamingQuality.shortBadge(tier.id),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) {
-                                            MaterialTheme.colorScheme.onPrimary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(tier.subtitleRes),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isSelected) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
-                        if (isSelected) {
-                            Icon(
-                                Icons.Rounded.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                    }
-                }
+            QualityTierList(selected = selected, onPick = onSelect)
+
+            if (selectedDownload != null && onSelectDownload != null) {
+                Text(
+                    text = stringResource(R.string.download_quality_section_title),
+                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = GoogleSansRounded),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                Text(
+                    text = stringResource(R.string.download_quality_section_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                QualityTierList(selected = selectedDownload, onPick = onSelectDownload)
             }
         }
     }

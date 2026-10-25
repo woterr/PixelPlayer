@@ -88,6 +88,10 @@ class YouTubeSettingsViewModel @Inject constructor(
         viewModelScope.launch { streamQualityPreferences.setStreamingQuality(quality) }
     }
 
+    fun setDownloadQuality(quality: Int) {
+        viewModelScope.launch { streamQualityPreferences.setDownloadQuality(quality) }
+    }
+
     fun setPreferLosslessStreaming(enabled: Boolean) {
         viewModelScope.launch { streamQualityPreferences.setPreferLosslessStreaming(enabled) }
     }

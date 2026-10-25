@@ -54,6 +54,10 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Menu
@@ -164,6 +168,13 @@ fun SongInfoBottomSheet(
     val isPixelPlayWatchAvailable by songInfoViewModel.isPixelPlayWatchAvailable.collectAsStateWithLifecycle()
     val isWatchAvailabilityResolved by songInfoViewModel.isWatchAvailabilityResolved.collectAsStateWithLifecycle()
     val isSendingToWatch by songInfoViewModel.isSendingToWatch.collectAsStateWithLifecycle()
+    val downloads by songInfoViewModel.downloads.collectAsStateWithLifecycle()
+    val songDownloadProgress = downloads[
+        com.theveloper.pixelplay.data.download.TrackDownloadManager.makeDownloadKey(
+            song.title,
+            song.artist,
+        ),
+    ]
     val watchTransfers by songInfoViewModel.watchTransfers.collectAsStateWithLifecycle()
     val watchSongIds by songInfoViewModel.watchSongIds.collectAsStateWithLifecycle()
     val reachableWatchNodeIds by songInfoViewModel.reachableWatchNodeIds.collectAsStateWithLifecycle()
@@ -537,6 +548,14 @@ fun SongInfoBottomSheet(
                                             onAddToQueue = onAddToQueue,
                                             onAddNextToQueue = onAddNextToQueue
                                         )
+
+                                        if (isYouTubeSong) {
+                                            DownloadActionsRow(
+                                                progress = songDownloadProgress,
+                                                onDownloadClick = { songInfoViewModel.requestDownload(song) },
+                                                onCancelClick = { songInfoViewModel.cancelDownload(song) },
+                                            )
+                                        }
 
                                         if (!isYouTubeSong) {
                                             Row3Actions(
@@ -1486,6 +1505,132 @@ private fun Row2Actions(
                 lineHeight = 20.sp
             )
         }
+    }
+}
+
+private enum class DownloadRowState { Idle, Active, Done, Failed }
+
+@Composable
+private fun DownloadActionsRow(
+    progress: com.theveloper.pixelplay.data.download.DownloadProgress?,
+    onDownloadClick: () -> Unit,
+    onCancelClick: () -> Unit,
+) {
+    val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+    var clickPending by remember { mutableStateOf(false) }
+
+    val downloadInteractionSource = remember { MutableInteractionSource() }
+    val isDownloadPressed by downloadInteractionSource.collectIsPressedAsState()
+    var downloadVisualPressed by remember { mutableStateOf(false) }
+    LaunchedEffect(isDownloadPressed) {
+        if (isDownloadPressed) {
+            downloadVisualPressed = true
+        } else {
+            kotlinx.coroutines.delay(180)
+            downloadVisualPressed = false
+        }
+    }
+
+    val pressSpec = spring<Float>(
+        dampingRatio = 0.8f,
+        stiffness = 300f
+    )
+
+    val pressFractionDownload by animateFloatAsState(
+        targetValue = if (downloadVisualPressed) 1f else 0f,
+        animationSpec = pressSpec,
+        label = "DownloadPressFraction"
+    )
+    val scale = 1f + 0.04f * pressFractionDownload
+
+    val state = when {
+        progress == null -> DownloadRowState.Idle
+        progress.error != null -> DownloadRowState.Failed
+        progress.isFinished -> DownloadRowState.Done
+        else -> DownloadRowState.Active
+    }
+
+    val idleLabel = stringResource(R.string.download_row_download)
+    val downloadingLabel = stringResource(R.string.download_row_downloading)
+    val doneLabel = stringResource(R.string.download_row_downloaded)
+    val failedLabel = stringResource(R.string.download_row_failed)
+
+    val label = when (state) {
+        DownloadRowState.Idle -> idleLabel
+        DownloadRowState.Active -> when {
+            progress!!.isWaitingForConnection -> downloadingLabel
+            progress.progressPercent > 0 -> "%d%% • %s".format(progress.progressPercent, progress.formatBadge)
+            else -> progress.formatBadge
+        }
+        DownloadRowState.Done -> doneLabel
+        DownloadRowState.Failed -> failedLabel
+    }
+
+    val containerColor by animateColorAsState(
+        targetValue = when (state) {
+            DownloadRowState.Idle -> MaterialTheme.colorScheme.primaryContainer
+            DownloadRowState.Active -> MaterialTheme.colorScheme.secondaryContainer
+            DownloadRowState.Done -> MaterialTheme.colorScheme.tertiaryContainer
+            DownloadRowState.Failed -> MaterialTheme.colorScheme.errorContainer
+        },
+        animationSpec = tween(durationMillis = 250),
+        label = "DownloadContainerColorAnimation"
+    )
+    val contentColor by animateColorAsState(
+        targetValue = when (state) {
+            DownloadRowState.Idle -> MaterialTheme.colorScheme.onPrimaryContainer
+            DownloadRowState.Active -> MaterialTheme.colorScheme.onSecondaryContainer
+            DownloadRowState.Done -> MaterialTheme.colorScheme.onTertiaryContainer
+            DownloadRowState.Failed -> MaterialTheme.colorScheme.onErrorContainer
+        },
+        animationSpec = tween(durationMillis = 250),
+        label = "DownloadContentColorAnimation"
+    )
+
+    FilledTonalButton(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 66.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale },
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        ),
+        contentPadding = PaddingValues(horizontal = 14.dp),
+        shape = CircleShape,
+        interactionSource = downloadInteractionSource,
+        onClick = {
+            if (clickPending) return@FilledTonalButton
+            clickPending = true
+            downloadVisualPressed = true
+            coroutineScope.launch {
+                kotlinx.coroutines.delay(180)
+                downloadVisualPressed = false
+                clickPending = false
+                when (state) {
+                    DownloadRowState.Idle, DownloadRowState.Done, DownloadRowState.Failed -> onDownloadClick()
+                    DownloadRowState.Active -> onCancelClick()
+                }
+            }
+        }
+    ) {
+        Icon(
+            imageVector = when (state) {
+                DownloadRowState.Idle -> Icons.Rounded.Download
+                DownloadRowState.Active -> Icons.Rounded.Close
+                DownloadRowState.Done -> Icons.Rounded.Check
+                DownloadRowState.Failed -> Icons.Rounded.Refresh
+            },
+            contentDescription = label,
+        )
+        Spacer(Modifier.width(6.dp))
+        TightWrapText(
+            text = label,
+            modifier = Modifier.weight(1f, fill = false),
+            overflow = TextOverflow.Ellipsis,
+            maxLines = 2,
+            lineHeight = 20.sp
+        )
     }
 }
 

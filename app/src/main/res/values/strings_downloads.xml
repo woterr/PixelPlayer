@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Download notification channel -->
+    <string name="download_notification_channel_name">Downloads</string>
+    <string name="download_notification_channel_desc">Audio download progress and completion</string>
+
+    <!-- Download progress stages -->
+    <string name="download_stage_preparing">Preparing…</string>
+    <string name="download_stage_finding_lossless">Finding lossless stream…</string>
+    <string name="download_stage_lossless_cooling">Lossless cooling down — using YouTube</string>
+    <string name="download_stage_downloading">Downloading…</string>
+    <string name="download_stage_finding_youtube">Finding YouTube stream…</string>
+
+    <!-- Download notifications -->
+    <string name="download_notification_waiting">Waiting for network</string>
+    <string name="download_notification_waiting_detail">Waiting to download %1$s by %2$s — %3$d%%</string>
+    <string name="download_notification_downloading">Downloading %1$s</string>
+    <string name="download_notification_text">%1$s • %2$s — %3$d%%</string>
+    <string name="download_notification_complete">Download complete</string>
+    <string name="download_notification_complete_detail">%1$s by %2$s • %3$s</string>
+    <string name="download_notification_failed">Download failed</string>
+    <string name="download_notification_failed_detail">%1$s by %2$s: %3$s</string>
+    <string name="download_action_reconnect">Reconnect</string>
+    <string name="download_action_cancel">Cancel</string>
+
+    <!-- Download hints -->
+    <string name="download_missing_tags">no tags</string>
+    <string name="download_missing_art">no art</string>
+    <string name="download_out_of_memory">Download failed: out of memory</string>
+    <string name="download_out_of_memory_retry">Out of memory — retry</string>
+
+    <!-- Song info sheet download row -->
+    <string name="download_row_download">Download</string>
+    <string name="download_row_downloading">Downloading…</string>
+    <string name="download_row_downloaded">Downloaded</string>
+    <string name="download_row_failed">Download failed</string>
+
+    <!-- Settings: download quality -->
+    <string name="download_quality_section_title">Download quality</string>
+    <string name="download_quality_section_desc">Audio tier saved to your device when downloading</string>
+</resources>

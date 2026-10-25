@@ -14,6 +14,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.database.MusicDao
+import com.theveloper.pixelplay.data.download.TrackDownloadManager
 import com.theveloper.pixelplay.data.database.toArtist
 import com.theveloper.pixelplay.data.model.Artist
 import com.theveloper.pixelplay.data.model.Song
@@ -47,6 +48,7 @@ class SongInfoBottomSheetViewModel @Inject constructor(
     private val wearPhoneTransferSender: WearPhoneTransferSender,
     private val transferStateStore: PhoneWatchTransferStateStore,
     private val musicDao: MusicDao,
+    private val trackDownloadManager: TrackDownloadManager,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
 
@@ -107,6 +109,37 @@ class SongInfoBottomSheetViewModel @Inject constructor(
     )
 
     val audioMeta: StateFlow<AudioMeta?> = _audioMeta.asStateFlow()
+
+    /** Live download progress, keyed by artist/title. */
+    val downloads: StateFlow<Map<String, com.theveloper.pixelplay.data.download.DownloadProgress>> =
+        trackDownloadManager.downloads
+
+    /**
+     * Starts a device download for this song. Only YouTube Music tracks
+     * (transient streams without a local file) are meaningful; the manager
+     * ignores duplicates and already-downloaded songs on its own.
+     */
+    fun requestDownload(song: Song) {
+        if (!song.isYouTube) return
+        trackDownloadManager.downloadTrack(
+            title = song.title,
+            artist = song.artist,
+            album = song.album.takeIf { it.isNotBlank() && it != "YouTube Music" },
+            artworkUrl = song.albumArtUriString,
+            videoId = song.youTubeId,
+            durationMs = song.duration,
+        )
+    }
+
+    fun cancelDownload(song: Song) {
+        if (!song.isYouTube) return
+        trackDownloadManager.cancelDownload(
+            com.theveloper.pixelplay.data.download.TrackDownloadManager.makeDownloadKey(
+                song.title,
+                song.artist,
+            ),
+        )
+    }
 
     fun loadArtistsForSong(song: Song) {
         val refs = song.artists
