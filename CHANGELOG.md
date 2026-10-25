@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Streaming Quality System (LastWave port):** Quality tiers (auto, 360p video, 128 kbps, 192 kbps, 256 kbps, lossless) with a lossless addon backend, per-song manual overrides tracked by a `tt` URI qualifier, quality badges, and a YouTube-quality settings sheet.
+- **YouTube Downloads (LastWave port):** Download any YouTube song at the configured tier — tier waterfall through the lossless addon with Atmos veto and duration guards, DASH segment fetching, WebM→Ogg remuxing ("PixelPlayer" vendor), FLAC unwrapping, TagLib embedding, and MediaStore insertion with progress/cancel/reconnect notifications.
+- **AI Playlist Generator Rework (LastWave port):** The AI playlist creation dialog now offers LastWave's music-source menu — top tracks, recent listens, song radio, similar artists, genre/tag, My Mix, recommendations, never heard, and your YouTube library — all fed by YouTube Music and funneled through the existing Gemini pipeline. Saved AI playlists built from YouTube keep resolving across restarts.
+- **Discover Home Section:** A YouTube Music recommendations shelf on Home (history-seeded radio + home feed + charts), refreshed every session.
+- **YouTube Connection:** Connect a YouTube Music account to personalize the home feed, mixes, listening history and generator sources.
+
+### Changed
+- **Webm→Ogg Remuxer:** Ogg comment vendor string is now `PixelPlayer`.
+- **InnerTube Client:** Extended with charts, history, song radio, playlist paging, home-mix summaries and anonymous fallback pools.
+
 ## [0.7.5-beta] - 2026-06-13
 
 ### Added

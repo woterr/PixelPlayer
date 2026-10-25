@@ -62,6 +62,8 @@
 
 ### 🔍 Discovery & Organization
 - **Full-text Search** - Search across your entire library
+- **YouTube Music Integration** - Personalized home feed, song search, mixes and charts right in the app
+- **Discover Shelf** - YouTube Music recommendations on the home screen
 - **Daily Mix** - AI-powered personalized playlist based on listening habits
 - **Playlists** - Create and manage custom playlists
 - **Statistics** - Track your listening history and habits
@@ -84,6 +86,10 @@
 ### ⚙️ Advanced Features
 - **Tag Editor** - Edit metadata with TagLib (MP3, FLAC, M4A support)
 - **AI Playlists** - Generate playlists with AI (Supports Gemini, Deepseek, OpenAI, etc.)
+- **Generator Sources** - Pull AI playlist candidates from YouTube Music (top tracks, recents, song radio, similar artists, genres, mixes, recommendations, never-heard, liked music) or your local library
+- **Streaming Quality System** - Quality tiers with a lossless addon backend, per-song manual overrides and quality badges
+- **Downloads** - Save YouTube songs with quality tiers, WebM/Opus remuxing, embedded tags and artwork to your Downloads
+- **Karaoke Lyrics** - Word-level lyric sync
 
 ---
 
