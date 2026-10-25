@@ -38,8 +38,13 @@ import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.extractor.flac.FlacExtractor
 import com.theveloper.pixelplay.data.diagnostics.PerformanceMetrics
 import com.theveloper.pixelplay.data.model.TransitionSettings
+import com.theveloper.pixelplay.data.preferences.StreamQualityPreferences
+import com.theveloper.pixelplay.data.quality.LosslessMusicApi
+import com.theveloper.pixelplay.data.quality.SpatialAudioCapability
+import com.theveloper.pixelplay.data.quality.StreamingQuality
 import com.theveloper.pixelplay.data.telegram.TelegramRepository
 import com.theveloper.pixelplay.data.youtube.YouTubeRepository
+import com.theveloper.pixelplay.data.youtube.YtSongUri
 import com.theveloper.pixelplay.utils.envelope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +59,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import timber.log.Timber
 import java.io.File
 import javax.inject.Inject
@@ -223,6 +229,8 @@ class DualPlayerEngine @Inject constructor(
     private val jellyfinStreamProxy: com.theveloper.pixelplay.data.jellyfin.JellyfinStreamProxy,
     private val gdriveStreamProxy: com.theveloper.pixelplay.data.gdrive.GDriveStreamProxy,
     private val youTubeRepository: YouTubeRepository,
+    private val losslessMusicApi: LosslessMusicApi,
+    private val streamQualityPreferences: StreamQualityPreferences,
     private val telegramCacheManager: com.theveloper.pixelplay.data.telegram.TelegramCacheManager,
     private val connectivityStateHolder: com.theveloper.pixelplay.presentation.viewmodel.ConnectivityStateHolder
 ) {
@@ -236,6 +244,16 @@ class DualPlayerEngine @Inject constructor(
         // audible glitch right after the fade). This keeps offload enabled across crossfades.
         private const val POST_TRANSITION_OFFLOAD_GUARD_MS = 2_000L
         private const val MAX_AUXILIARY_TIMELINE_ITEMS = 200
+        // Bounded lossless resolve budget for the in-DataSpec path. LastWave
+        // gives the interactive resolve a 5 s window; here playback falls back
+        // to the already-fast YouTube path sooner so cold start latency never
+        // regresses more than this much over a YouTube-only session.
+        private const val LOSSLESS_RESOLVE_BUDGET_MS = 2_000L
+        // Defensive cap for cached addon URLs without an `exp` param: googlevideo
+        // signatures and addon tokens are short-lived, and a stale entry must
+        // self-heal by re-resolving rather than pinning a dead URL.
+        private const val LOSSLESS_URL_TTL_MS = 15 * 60 * 1000L
+        private const val LOSSLESS_CACHE_MAX_SIZE = 40
         private val LOCAL_MEDIA_SCHEMES = setOf("content", "file", "android.resource")
         private val REMOTE_MEDIA_SCHEMES = setOf("http", "https", "telegram", "netease", "qqmusic", "navidrome", "jellyfin", "gdrive", "ytmusic")
         // Subset of REMOTE_MEDIA_SCHEMES: schemes that need proxy resolution.
@@ -764,6 +782,10 @@ class DualPlayerEngine @Inject constructor(
     private var isReleased = false
     private val resolvedUriCache = LruCache<String, Uri>(100)
 
+    /** Resolved progressive lossless URLs per ytmusic item, keyed by video id. */
+    private data class CachedLosslessUrl(val url: String, val expiresAtMs: Long)
+    private val losslessUrlCache = LruCache<String, CachedLosslessUrl>(LOSSLESS_CACHE_MAX_SIZE)
+
     // Whether the OS classifies this as a low-RAM device. Used to cap the player's max
     // prefetch depth so hi-res/lossless buffering (and the second player during a crossfade)
     // can't balloon peak memory on constrained hardware. Cached: it never changes at runtime.
@@ -1104,8 +1126,14 @@ class DualPlayerEngine @Inject constructor(
                 val uri = dataSpec.uri
                 val scheme = uri.scheme
                 if (scheme == "ytmusic") {
-                    val videoId = uri.toString().removePrefix("ytmusic://").substringBefore('?')
+                    val uriText = uri.toString()
+                    val videoId = YtSongUri.videoId(uriText)
                     if (videoId.isNotBlank()) {
+                        // Preferred path: addon-resolved lossless/hi-res progressive
+                        // URL, honouring the streaming quality tier and the
+                        // prefer-lossless switch. Returns null on any miss or gate
+                        // below, and playback then resolves YouTube exactly as before.
+                        resolveLosslessDataSpec(dataSpec, uriText, videoId)?.let { return it }
                         // 1) Warm cache (prefetch/prepareNext path) — attaches the
                         //    signed URL *and* the headers ExoPlayer needs.
                         // 2) Cold start: resolve synchronously on the loading
@@ -1309,6 +1337,109 @@ class DualPlayerEngine @Inject constructor(
         if (videoId.isBlank()) return@withContext null
         runCatching { youTubeRepository.resolveStream(videoId) }.getOrNull()
         null
+    }
+
+    /**
+     * Tries to replace a `ytmusic://` [DataSpec] with an addon-resolved
+     * lossless progressive URL, honouring the streaming quality tier and the
+     * prefer-lossless switch. Returns null — never throws — when the addon
+     * chain is off, cooling down, cannot verify a matching master, or answers
+     * with a format this player cannot consume without the DASH module (MPD /
+     * HLS manifests stay YouTube-backed).
+     *
+     * Mirrors LastWave's streaming flow: Atmos plays only when explicitly
+     * selected AND the device can render it (otherwise demote to hi-res
+     * stereo), and the whole attempt is bounded by [LOSSLESS_RESOLVE_BUDGET_MS]
+     * so start latency never regresses beyond a YouTube-only session.
+     */
+    private fun resolveLosslessDataSpec(dataSpec: DataSpec, uriText: String, videoId: String): DataSpec? {
+        val settings = streamQualityPreferences.snapshot
+        if (!settings.preferLosslessStreaming) return null
+        if (settings.streamingQuality == StreamingQuality.QUALITY_YOUTUBE) return null
+        if (!losslessMusicApi.isConfigured || losslessMusicApi.isCoolingDown) return null
+
+        val cached = losslessUrlCache.get(videoId)
+        if (cached != null) {
+            if (cached.expiresAtMs > System.currentTimeMillis()) {
+                return dataSpec.buildUpon()
+                    .setUri(cached.url.toUri())
+                    .setHttpRequestHeaders(dataSpec.httpRequestHeaders)
+                    .build()
+            }
+            losslessUrlCache.remove(videoId)
+        }
+
+        val qualifier = YtSongUri.qualifier(uriText) ?: return null
+        if (qualifier.title.isBlank() || qualifier.artist.isBlank()) return null
+
+        val atmosSupported = SpatialAudioCapability.isSpatialAudioSupportedOnDevice(audioManager)
+        val effectiveQuality = if (
+            settings.streamingQuality == StreamingQuality.QUALITY_DOLBY_ATMOS && !atmosSupported
+        ) {
+            StreamingQuality.QUALITY_MAX_HI_RES
+        } else {
+            settings.streamingQuality
+        }
+
+        val resolved = runBlocking(Dispatchers.IO) {
+            withTimeoutOrNull(LOSSLESS_RESOLVE_BUDGET_MS) {
+                runCatching {
+                    losslessMusicApi.resolveStream(
+                        title = qualifier.title,
+                        artist = qualifier.artist,
+                        expectedDurationSeconds = qualifier.durationSeconds,
+                        expectedAlbum = qualifier.album,
+                        preferredQuality = effectiveQuality,
+                    )
+                }.getOrNull()
+            }
+        } ?: return null
+
+        val url = resolved.url
+        if (url.isBlank() || !isPlayableLosslessPlaybackUrl(url)) {
+            Timber.tag("DualPlayerEngine").d(
+                "resolveDataSpec: lossless resolve returned a non-progressive stream for %s; using YouTube",
+                videoId,
+            )
+            return null
+        }
+
+        losslessUrlCache.put(
+            videoId,
+            CachedLosslessUrl(url, addonUrlExpiryMs(url) ?: System.currentTimeMillis() + LOSSLESS_URL_TTL_MS),
+        )
+        Timber.tag("DualPlayerEngine").i(
+            "resolveDataSpec: locked lossless stream for %s (format=%s, depth=%s, rate=%skHz)",
+            videoId,
+            resolved.formatId,
+            resolved.bitDepth.takeIf { it > 0 } ?: "unknown",
+            resolved.samplingRate,
+        )
+        return dataSpec.buildUpon()
+            .setUri(url.toUri())
+            .setHttpRequestHeaders(dataSpec.httpRequestHeaders)
+            .build()
+    }
+
+    /**
+     * Only direct progressive media URLs are rewritable without the DASH/HLS
+     * media sources: MPD / m3u8 manifests stay YouTube-backed until those
+     * modules land.
+     */
+    private fun isPlayableLosslessPlaybackUrl(url: String): Boolean {
+        val uri = url.toUri()
+        val scheme = uri.scheme ?: return false
+        if (!scheme.equals("http", ignoreCase = true) && !scheme.equals("https", ignoreCase = true)) return false
+        val lower = url.substringBefore('?').lowercase()
+        if (lower.endsWith(".mpd") || lower.contains("/mpd") || lower.contains(".m3u8")) return false
+        return true
+    }
+
+    /** Addon media URLs carry `exp` (epoch; ms preferred, seconds tolerated). */
+    private fun addonUrlExpiryMs(url: String): Long? {
+        val raw = runCatching { url.toUri().getQueryParameter("exp") }.getOrNull() ?: return null
+        val num = raw.toLongOrNull()?.takeIf { it > 0L } ?: return null
+        return if (num > 1_000_000_000_000L) num else num * 1_000L
     }
 
     suspend fun resolveMediaItem(mediaItem: MediaItem): MediaItem {

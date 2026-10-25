@@ -77,6 +77,13 @@ class YouTubeRepository @Inject constructor(
         val albumName = track.album?.takeIf { it.isNotBlank() } ?: "YouTube Music"
         val artistId = -(YOUTUBE_ARTIST_ID_OFFSET + stableHash(artistName.lowercase()))
         val albumId = -(YOUTUBE_ALBUM_ID_OFFSET + stableHash(albumName.lowercase()))
+        val contentUriString = YtSongUri.encode(
+            videoId = track.videoId,
+            title = track.title,
+            artist = artistName,
+            album = albumName,
+            durationSeconds = track.durationSeconds,
+        )
         return Song(
             id = songIdFor(track.videoId).toString(),
             title = track.title,
@@ -87,7 +94,7 @@ class YouTubeRepository @Inject constructor(
             albumId = albumId,
             albumArtist = artistName,
             path = "",
-            contentUriString = "ytmusic://${track.videoId}",
+            contentUriString = contentUriString,
             albumArtUriString = track.artworkUrl,
             duration = (track.durationSeconds ?: 0).coerceAtLeast(0) * 1_000L,
             genre = null,

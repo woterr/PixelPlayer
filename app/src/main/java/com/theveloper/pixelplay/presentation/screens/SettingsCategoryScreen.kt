@@ -56,6 +56,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.systemBars
@@ -163,11 +165,13 @@ import com.theveloper.pixelplay.data.backup.model.ModuleRestoreDetail
 import com.theveloper.pixelplay.data.backup.model.RestorePlan
 import com.theveloper.pixelplay.data.preferences.AppLanguage
 import com.theveloper.pixelplay.data.preferences.AppThemeMode
+import com.theveloper.pixelplay.data.preferences.AddonStatus
 import com.theveloper.pixelplay.data.preferences.CollagePattern
 import com.theveloper.pixelplay.data.preferences.CarouselStyle
 import com.theveloper.pixelplay.data.preferences.LaunchTab
 import com.theveloper.pixelplay.data.preferences.LibraryNavigationMode
 import com.theveloper.pixelplay.data.preferences.NavBarStyle
+import com.theveloper.pixelplay.data.quality.StreamingQuality
 import com.theveloper.pixelplay.data.preferences.ThemePreference
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.model.LyricsSourcePreference
@@ -2947,6 +2951,10 @@ private fun YouTubeSettingsSectionContent(
     val preferOpus by viewModel.preferOpus.collectAsStateWithLifecycle()
     val sessionStatus by viewModel.sessionStatus.collectAsStateWithLifecycle()
     val switchAccountRequested by viewModel.switchAccountRequested.collectAsStateWithLifecycle()
+    val streamQualitySettings by viewModel.streamQualitySettings.collectAsStateWithLifecycle()
+    val addonStatus by viewModel.addonStatus.collectAsStateWithLifecycle()
+    var showQualitySheet by remember { mutableStateOf(false) }
+    var showAddonSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(sessionStatus.message) {
         sessionStatus.message?.let { message ->
@@ -3091,6 +3099,388 @@ private fun YouTubeSettingsSectionContent(
                 },
                 onClick = { viewModel.refreshSession() }
             )
+        }
+    }
+
+    SettingsSubsection(
+        title = stringResource(R.string.settings_youtube_quality_section),
+        addBottomSpace = false
+    ) {
+        SettingsItem(
+            title = stringResource(R.string.settings_youtube_quality_title),
+            subtitle = stringResource(ytQualityTierTitleRes(streamQualitySettings.streamingQuality)),
+            leadingIcon = {
+                Icon(
+                    painterResource(R.drawable.outline_high_quality_24),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            onClick = { showQualitySheet = true }
+        )
+        SwitchSettingItem(
+            title = stringResource(R.string.settings_youtube_lossless_switch_title),
+            subtitle = stringResource(R.string.settings_youtube_lossless_switch_subtitle),
+            checked = streamQualitySettings.preferLosslessStreaming,
+            onCheckedChange = viewModel::setPreferLosslessStreaming,
+            leadingIcon = {
+                Icon(
+                    painterResource(R.drawable.rounded_surround_sound_24),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+            }
+        )
+        SettingsItem(
+            title = stringResource(R.string.settings_youtube_addon_title),
+            subtitle = when {
+                streamQualitySettings.addonUrl.isBlank() ->
+                    stringResource(R.string.settings_youtube_addon_subtitle_unconfigured)
+                streamQualitySettings.addonEnabled ->
+                    stringResource(R.string.settings_youtube_addon_summary_enabled, streamQualitySettings.addonUrl)
+                else ->
+                    stringResource(R.string.settings_youtube_addon_summary_disabled, streamQualitySettings.addonUrl)
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Outlined.Language,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            onClick = { showAddonSheet = true }
+        )
+    }
+
+    if (showQualitySheet) {
+        YouTubeQualitySheet(
+            selected = streamQualitySettings.streamingQuality,
+            onSelect = { tier ->
+                viewModel.setStreamingQuality(tier)
+                showQualitySheet = false
+            },
+            onDismiss = { showQualitySheet = false }
+        )
+    }
+
+    if (showAddonSheet) {
+        YouTubeAddonSheet(
+            initialUrl = streamQualitySettings.addonUrl,
+            initialEnabled = streamQualitySettings.addonEnabled,
+            status = addonStatus,
+            onCheck = viewModel::checkAddonHealth,
+            onSave = { url, enabled ->
+                viewModel.setAddonUrl(url)
+                viewModel.setAddonEnabled(enabled)
+                showAddonSheet = false
+            },
+            onDismiss = { showAddonSheet = false }
+        )
+    }
+}
+
+/** One selectable tier of the streaming quality sheet (LastWave semantics). */
+private data class YtQualityTierRow(
+    val id: Int,
+    val titleRes: Int,
+    val subtitleRes: Int,
+)
+
+private val YT_QUALITY_TIERS = listOf(
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_DOLBY_ATMOS,
+        R.string.quality_tier_dolby_atmos_title,
+        R.string.quality_tier_dolby_atmos_subtitle
+    ),
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_MAX_HI_RES,
+        R.string.quality_tier_hires_max_title,
+        R.string.quality_tier_hires_max_subtitle
+    ),
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_HI_RES_96,
+        R.string.quality_tier_hires_title,
+        R.string.quality_tier_hires_subtitle
+    ),
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_CD_LOSSLESS,
+        R.string.quality_tier_cd_title,
+        R.string.quality_tier_cd_subtitle
+    ),
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_MP3_320,
+        R.string.quality_tier_high_title,
+        R.string.quality_tier_high_subtitle
+    ),
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_DATA_SAVER,
+        R.string.quality_tier_data_saver_title,
+        R.string.quality_tier_data_saver_subtitle
+    ),
+    YtQualityTierRow(
+        StreamingQuality.QUALITY_YOUTUBE,
+        R.string.quality_tier_youtube_title,
+        R.string.quality_tier_youtube_subtitle
+    ),
+)
+
+private fun ytQualityTierTitleRes(quality: Int): Int =
+    YT_QUALITY_TIERS.firstOrNull { it.id == quality }?.titleRes ?: R.string.quality_tier_youtube_title
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun YouTubeQualitySheet(
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.settings_youtube_quality_sheet_title),
+                style = MaterialTheme.typography.titleLarge.copy(fontFamily = GoogleSansRounded),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = stringResource(R.string.settings_youtube_quality_sheet_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = stringResource(R.string.settings_youtube_quality_sheet_footnote),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+            YT_QUALITY_TIERS.forEach { tier ->
+                val isSelected = tier.id == selected
+                Surface(
+                    onClick = { onSelect(tier.id) },
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                    border = if (isSelected) {
+                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(tier.titleRes),
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontFamily = GoogleSansRounded),
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHighest
+                                    }
+                                ) {
+                                    Text(
+                                        text = StreamingQuality.shortBadge(tier.id),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = stringResource(tier.subtitleRes),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        if (isSelected) {
+                            Icon(
+                                Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun YouTubeAddonSheet(
+    initialUrl: String,
+    initialEnabled: Boolean,
+    status: AddonStatus,
+    onCheck: (String) -> Unit,
+    onSave: (String, Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var draftUrl by remember { mutableStateOf(initialUrl) }
+    var draftEnabled by remember { mutableStateOf(initialEnabled) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.settings_youtube_addon_sheet_title),
+                style = MaterialTheme.typography.titleLarge.copy(fontFamily = GoogleSansRounded),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            OutlinedTextField(
+                value = draftUrl,
+                onValueChange = { draftUrl = it },
+                singleLine = true,
+                label = { Text(stringResource(R.string.settings_youtube_addon_title)) },
+                placeholder = { Text(stringResource(R.string.settings_youtube_addon_sheet_hint)) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.settings_youtube_addon_sheet_enabled),
+                        style = MaterialTheme.typography.bodyLarge.copy(fontFamily = GoogleSansRounded),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Switch(
+                    checked = draftEnabled,
+                    onCheckedChange = { draftEnabled = it }
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                when (status) {
+                    is AddonStatus.Checking -> {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Text(
+                            text = stringResource(R.string.settings_youtube_addon_sheet_status_checking),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    is AddonStatus.Ok -> Text(
+                        text = stringResource(R.string.settings_youtube_addon_sheet_status_ok, status.info),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    is AddonStatus.Failed -> Text(
+                        text = stringResource(R.string.settings_youtube_addon_sheet_status_failed, status.reason),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    is AddonStatus.Idle -> Text(
+                        text = stringResource(R.string.settings_youtube_addon_sheet_status_idle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.weight(1f))
+                TextButton(
+                    onClick = { onCheck(draftUrl) },
+                    enabled = draftUrl.isNotBlank() && status != AddonStatus.Checking
+                ) {
+                    Text(stringResource(R.string.settings_youtube_addon_sheet_check))
+                }
+            }
+            Text(
+                text = stringResource(R.string.settings_youtube_addon_sheet_footnote),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+                TextButton(
+                    onClick = { onSave(draftUrl, draftEnabled) },
+                    enabled = draftUrl.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.common_save))
+                }
+            }
         }
     }
 }
