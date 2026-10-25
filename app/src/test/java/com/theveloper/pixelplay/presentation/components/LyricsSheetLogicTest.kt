@@ -416,6 +416,66 @@ class LyricsSheetLogicTest {
     }
 
     @Test
+    fun resolveLineVocalEndTimeMs_usesLastTimedWordEnd() {
+        val line = SyncedLine(
+            time = 10_000,
+            line = "hello again",
+            words = listOf(
+                SyncedWord(time = 10_000, word = "hello", durationMs = 500),
+                SyncedWord(time = 10_600, word = "again", durationMs = 400)
+            )
+        )
+
+        assertEquals(11_000L, resolveLineVocalEndTimeMs(line, nextLineStartMs = 20_000))
+    }
+
+    @Test
+    fun resolveLineVocalEndTimeMs_fallsBackToCappedSweepWithoutWordDurations() {
+        val legacyWords = SyncedLine(
+            time = 10_000,
+            line = "legacy",
+            words = listOf(SyncedWord(time = 10_000, word = "legacy"))
+        )
+        val plain = SyncedLine(time = 10_000, line = "plain")
+
+        // A long gap must not let the fallback sweep crawl past the cap.
+        assertEquals(18_000L, resolveLineVocalEndTimeMs(legacyWords, nextLineStartMs = 60_000))
+        assertEquals(13_500L, resolveLineVocalEndTimeMs(plain, nextLineStartMs = 13_500))
+        assertEquals(14_500L, resolveLineVocalEndTimeMs(plain, nextLineStartMs = Int.MAX_VALUE))
+    }
+
+    @Test
+    fun resolveLineVocalEndTimeMs_clampsAtNextRowStart() {
+        val line = SyncedLine(
+            time = 10_000,
+            line = "hold",
+            words = listOf(SyncedWord(time = 10_000, word = "hold", durationMs = 5_000))
+        )
+
+        assertEquals(12_000L, resolveLineVocalEndTimeMs(line, nextLineStartMs = 12_000))
+    }
+
+    @Test
+    fun resolveLineVocalEndTimeMs_neverCollapsesToZeroLengthWindow() {
+        val line = SyncedLine(time = 10_000, line = "duplicate timestamp")
+
+        assertEquals(10_001L, resolveLineVocalEndTimeMs(line, nextLineStartMs = 10_000))
+    }
+
+    @Test
+    fun resolveInstrumentalGapStartMs_reportsOnlyRealGapsBeforeNextRow() {
+        val sung = SyncedLine(
+            time = 10_000,
+            line = "line",
+            words = listOf(SyncedWord(time = 10_000, word = "line", durationMs = 2_000))
+        )
+
+        assertEquals(12_000L, resolveInstrumentalGapStartMs(sung, nextLineStartMs = 20_000))
+        assertEquals(null, resolveInstrumentalGapStartMs(sung, nextLineStartMs = 12_000))
+        assertEquals(null, resolveInstrumentalGapStartMs(sung, nextLineStartMs = Int.MAX_VALUE))
+    }
+
+    @Test
     fun lineSweepProgress_advancesAcrossWholeRowSpan() {
         val duration = resolveLineSweepDurationMs(10_000L, 14_000L, isLastLine = false)
 

@@ -703,7 +703,6 @@ class LyricsRepositoryImpl @Inject constructor(
         mode: RemoteLyricsMatchMode
     ): List<RemoteLyricsMatch> {
         val songDurationSeconds = song.duration / 1000.0
-        if (songDurationSeconds <= 0.0) return emptyList()
 
         return responses
             .mapNotNull { response ->
@@ -732,9 +731,16 @@ class LyricsRepositoryImpl @Inject constructor(
         if (!variantDescriptorsCompatible(song, response)) return null
 
         val hasSynced = hasSyncedLyrics(response)
-        val durationTolerance = remoteDurationToleranceSeconds(songDurationSeconds, hasSynced, mode)
+        // A newly downloaded track can reach the lyrics pipeline before its
+        // duration is resolved. Title and artist still identify it, so skip
+        // the duration filter instead of discarding every candidate.
+        val durationTolerance = if (songDurationSeconds > 0.0) {
+            remoteDurationToleranceSeconds(songDurationSeconds, hasSynced, mode)
+        } else {
+            0.0
+        }
         val durationDiff = abs(response.duration - songDurationSeconds)
-        if (durationDiff > durationTolerance) return null
+        if (songDurationSeconds > 0.0 && durationDiff > durationTolerance) return null
 
         val titleScore = titleMatchScore(song.title, response.name, mode) ?: return null
         val artistScore = artistMatchScore(song.displayArtist, response.artistName)
@@ -1404,8 +1410,11 @@ class LyricsRepositoryImpl @Inject constructor(
                 lrcLibApiService.getLyrics(
                     trackName = song.title,
                     artistName = song.displayArtist,
-                    albumName = song.album,
-                    duration = (song.duration / 1000).toInt()
+                    albumName = song.album.trim().takeIf { it.isNotEmpty() },
+                    // LRCLIB rejects exact lookups whose duration is outside
+                    // 1..3600 s with a 400. New downloads can still have an
+                    // unresolved (0) duration and long mixes exceed the cap.
+                    duration = (song.duration / 1000).toInt().takeIf { it in 1..3600 }
                 )
             }
 

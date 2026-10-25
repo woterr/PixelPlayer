@@ -1409,25 +1409,48 @@ fun SyncedLyricsList(
                     } else Modifier
 
                     if (line.line.isNotBlank()) {
-                        LyricLineRow(
-                            line = line,
-                            nextTime = nextTime,
-                            positionProvider = positionProvider,
-                            distanceFromCurrent = distanceFromCurrent,
-                            useAnimatedLyrics = useAnimatedLyrics,
-                            animatedLyricsBlurEnabled = animatedLyricsBlurEnabled,
-                            animatedLyricsBlurStrength = animatedLyricsBlurStrength,
-                            immersiveMode = immersiveMode,
-                            lyricsAlignment = lyricsAlignment,
-                            showTranslation = showTranslation,
-                            showRomanization = showRomanization,
-                            accentColor = accentColor,
-                            style = textStyle,
-                            modifier = parallaxModifier
-                                .fillMaxWidth()
-                                .testTag("synced_line_${line.time}"),
-                            onClick = { onLineClick(line) }
-                        )
+                        val instrumentalGapStart = remember(line, nextTime) {
+                            resolveInstrumentalGapStartMs(line, nextTime)
+                        }
+                        val isInstrumentalGap by remember(line.time, instrumentalGapStart, nextTime) {
+                            derivedStateOf {
+                                val gapStart = instrumentalGapStart ?: return@derivedStateOf false
+                                positionProvider() in gapStart until nextTime.toLong()
+                            }
+                        }
+                        if (isInstrumentalGap && instrumentalGapStart != null) {
+                            BubblesLine(
+                                positionFlow = playbackPositionFlow,
+                                positionProvider = positionProvider,
+                                time = instrumentalGapStart.toInt(),
+                                color = LocalContentColor.current.copy(alpha = 0.6f),
+                                nextTime = nextTime,
+                                animate = isVisible,
+                                modifier = parallaxModifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                            )
+                        } else {
+                            LyricLineRow(
+                                line = line,
+                                nextTime = nextTime,
+                                positionProvider = positionProvider,
+                                distanceFromCurrent = distanceFromCurrent,
+                                useAnimatedLyrics = useAnimatedLyrics,
+                                animatedLyricsBlurEnabled = animatedLyricsBlurEnabled,
+                                animatedLyricsBlurStrength = animatedLyricsBlurStrength,
+                                immersiveMode = immersiveMode,
+                                lyricsAlignment = lyricsAlignment,
+                                showTranslation = showTranslation,
+                                showRomanization = showRomanization,
+                                accentColor = accentColor,
+                                style = textStyle,
+                                modifier = parallaxModifier
+                                    .fillMaxWidth()
+                                    .testTag("synced_line_${line.time}"),
+                                onClick = { onLineClick(line) }
+                            )
+                        }
                     } else {
                         BubblesLine(
                             positionFlow = playbackPositionFlow,
@@ -1482,7 +1505,7 @@ fun LyricLineRow(
 ) {
     val sanitizedLine = remember(line.line) { sanitizeLyricLineText(line.line) }
     val lineEndTime = remember(line, nextTime) {
-        resolveLineEndTimeMs(line, nextTime)
+        resolveLineVocalEndTimeMs(line, nextTime)
     }
     // Providers sometimes time a whole phrase as one span ("And it comes so
     // far"). Split it into words with distributed timings so the accent moves
@@ -1901,6 +1924,33 @@ internal fun resolveLineSweepDurationMs(
     return raw.coerceAtLeast(0L).coerceAtMost(
         if (isLastLine) LAST_LINE_SWEEP_DURATION_MS else MAX_LINE_SWEEP_DURATION_MS
     )
+}
+
+internal fun resolveLineVocalEndTimeMs(line: SyncedLine, nextLineStartMs: Int): Long {
+    val lineStartMs = line.time.toLong()
+    val nextStartMs = nextLineStartMs.toLong()
+    val fallbackEndMs = lineStartMs + resolveLineSweepDurationMs(
+        lineStartMs = lineStartMs,
+        nextLineStartMs = nextStartMs,
+        isLastLine = nextLineStartMs >= Int.MAX_VALUE
+    )
+    val timedWordEndMs = line.words.orEmpty()
+        .filter { it.durationMs > 0 }
+        .maxOfOrNull { it.time.toLong() + it.durationMs }
+    val minimumEndMs = lineStartMs + 1L
+    return (timedWordEndMs ?: fallbackEndMs)
+        .coerceAtLeast(minimumEndMs)
+        .coerceAtMost(nextStartMs.coerceAtLeast(minimumEndMs))
+}
+
+/**
+ * Start of the music-only stretch that follows a row's vocals, or `null`
+ * when the next row starts before the vocals end (or there is no next row).
+ */
+internal fun resolveInstrumentalGapStartMs(line: SyncedLine, nextLineStartMs: Int): Long? {
+    if (nextLineStartMs >= Int.MAX_VALUE) return null
+    val vocalEndMs = resolveLineVocalEndTimeMs(line, nextLineStartMs)
+    return vocalEndMs.takeIf { it < nextLineStartMs.toLong() }
 }
 
 /** LastWave's lyric glow: a soft blurred copy of the active row behind the ink. */

@@ -490,6 +490,132 @@ class LyricsRepositoryImplTest {
         coVerify(exactly = 1) { lyricsDao.insert(any()) }
     }
 
+    @Test
+    fun fetchFromRemote_omitsBlankAlbumAndZeroDurationFromExactLookup() = runTest {
+        val apiService = mockk<LrcLibApiService>(relaxed = true)
+        val repository = LyricsRepositoryImpl(
+            context = testContext(),
+            lrcLibApiService = apiService,
+            lyricsDao = mockk<LyricsDao>(relaxed = true),
+            okHttpClient = mockk<OkHttpClient>(relaxed = true),
+            wordSyncLyricsProvider = mockk(relaxed = true)
+        )
+        val song = testSong(
+            id = "105",
+            title = "New Download",
+            artist = "Artist",
+            duration = 0L
+        ).copy(album = " ")
+
+        repository.fetchFromRemote(song)
+
+        coVerify(exactly = 1) {
+            apiService.getLyrics(
+                trackName = "New Download",
+                artistName = "Artist",
+                albumName = null,
+                duration = null
+            )
+        }
+    }
+
+    @Test
+    fun fetchFromRemote_keepsValidExactLookupMetadata() = runTest {
+        val apiService = mockk<LrcLibApiService>(relaxed = true)
+        val repository = LyricsRepositoryImpl(
+            context = testContext(),
+            lrcLibApiService = apiService,
+            lyricsDao = mockk<LyricsDao>(relaxed = true),
+            okHttpClient = mockk<OkHttpClient>(relaxed = true),
+            wordSyncLyricsProvider = mockk(relaxed = true)
+        )
+        val song = testSong(
+            id = "106",
+            title = "Existing Track",
+            artist = "Artist",
+            duration = 180_000L
+        )
+
+        repository.fetchFromRemote(song)
+
+        coVerify(exactly = 1) {
+            apiService.getLyrics(
+                trackName = "Existing Track",
+                artistName = "Artist",
+                albumName = "Album",
+                duration = 180
+            )
+        }
+    }
+
+    @Test
+    fun fetchFromRemote_zeroDurationSongAcceptsMatchingExactLookup() = runTest {
+        val apiService = mockk<LrcLibApiService>(relaxed = true)
+        val lyricsDao = mockk<LyricsDao>(relaxed = true)
+        coEvery { apiService.searchLyrics(any(), any(), any(), any()) } returns emptyArray()
+        coEvery { apiService.getLyrics(any(), any(), any(), any()) } returns lrcResponse(
+            name = "New Download",
+            artistName = "Artist",
+            duration = 180.0
+        )
+        val repository = LyricsRepositoryImpl(
+            context = testContext(),
+            lrcLibApiService = apiService,
+            lyricsDao = lyricsDao,
+            okHttpClient = mockk<OkHttpClient>(relaxed = true),
+            wordSyncLyricsProvider = mockk(relaxed = true)
+        )
+        val song = testSong(
+            id = "107",
+            title = "New Download",
+            artist = "Artist",
+            duration = 0L
+        ).copy(album = "")
+
+        val result = repository.fetchFromRemote(song)
+
+        assertThat(result.isSuccess).isTrue()
+        assertThat(result.getOrThrow().first.areFromRemote).isTrue()
+        coVerify(exactly = 1) { lyricsDao.insert(any()) }
+        coVerify(exactly = 1) {
+            apiService.getLyrics(
+                trackName = "New Download",
+                artistName = "Artist",
+                albumName = null,
+                duration = null
+            )
+        }
+    }
+
+    @Test
+    fun fetchFromRemote_omitsDurationAboveLrcLibLimit() = runTest {
+        val apiService = mockk<LrcLibApiService>(relaxed = true)
+        val repository = LyricsRepositoryImpl(
+            context = testContext(),
+            lrcLibApiService = apiService,
+            lyricsDao = mockk<LyricsDao>(relaxed = true),
+            okHttpClient = mockk<OkHttpClient>(relaxed = true),
+            wordSyncLyricsProvider = mockk(relaxed = true)
+        )
+        val song = testSong(
+            id = "108",
+            title = "Long Mix",
+            artist = "Artist",
+            duration = 7_200_000L
+        )
+
+        repository.fetchFromRemote(song)
+
+        coVerify(exactly = 1) {
+            apiService.getLyrics(
+                trackName = "Long Mix",
+                artistName = "Artist",
+                albumName = "Album",
+                duration = null
+            )
+        }
+    }
+
     private fun testContext(filesDir: File = Files.createTempDirectory("pixelplay-lyrics-test").toFile()): Context {
         return mockk<Context>(relaxed = true) {
             every { this@mockk.filesDir } returns filesDir

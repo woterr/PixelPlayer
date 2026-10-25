@@ -1204,6 +1204,8 @@ fun ProviderText(
  * @param time The start time at which these bubbles become visible.
  * @param color The base colour for the bubbles and notes.
  * @param nextTime The end time at which these bubbles disappear.
+ * @param positionProvider Optional playhead shared with the lyrics renderer;
+ * when supplied it replaces [positionFlow] so sync offset and seeking apply.
  * @param modifier Modifier applied to this layout.
  */
 @Composable
@@ -1213,13 +1215,14 @@ fun BubblesLine(
     color: Color,
     nextTime: Int,
     animate: Boolean = true,
+    positionProvider: (() -> Long)? = null,
     modifier: Modifier = Modifier,
 ) {
     val position by positionFlow.collectAsStateWithLifecycle(initialValue = 0L)
     // Deriving a boolean keeps idle bubble rows from recomposing on every
     // 250 ms position tick; only the line entering/leaving its window changes.
-    val isCurrent by remember(time, nextTime) {
-        derivedStateOf { position in time until nextTime }
+    val isCurrent by remember(time, nextTime, positionProvider) {
+        derivedStateOf { (positionProvider?.invoke() ?: position) in time until nextTime }
     }
     var show by remember { mutableStateOf(false) }
     LaunchedEffect(isCurrent) {

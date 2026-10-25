@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **InnerTube Client:** Extended with charts, history, song radio, playlist paging, home-mix summaries and anonymous fallback pools.
 
 ### Fixed
+- **Lyrics Search:** LRCLIB exact lookups no longer send a blank album or an out-of-range duration, which made lyrics searches for newly downloaded tracks fail with HTTP 400. Tracks whose duration is still unresolved are now matched by title and artist instead of being discarded.
 - **Progressive Karaoke Lyrics:** Line-synced lyrics now sweep with the vocals again — LastWave's karaoke contract (a row's end implied by the next row's start, ease-out fill, wrapped rows filled in reading order) is applied to rows without word timing instead of a static highlight. Word-synced rows keep their per-syllable fill, and the new sweep shares the same renderer and refresh-rate glide.
 
 ## [0.7.5-beta] - 2026-06-13
